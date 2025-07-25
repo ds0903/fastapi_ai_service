@@ -10,7 +10,17 @@ from .config import settings
 
 Base = declarative_base()
 
-engine = create_engine(settings.database_url)
+# Configure database engine with proper connection pooling for concurrent webhooks
+engine = create_engine(
+    settings.database_url,
+    pool_size=20,          # Number of connections to maintain in pool
+    max_overflow=30,       # Additional connections beyond pool_size  
+    pool_timeout=30,       # Seconds to wait for connection
+    pool_recycle=3600,     # Recycle connections after 1 hour
+    pool_pre_ping=True,    # Validate connections before use
+    echo=False             # Set to True for SQL query logging
+)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

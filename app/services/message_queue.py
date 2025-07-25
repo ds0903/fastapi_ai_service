@@ -31,8 +31,9 @@ class MessageQueueService:
         1. Check if message should be processed (retry logic)
         2. Add to queue or update existing message
         3. Handle message aggregation for flood protection
+        4. Coordinate send_status for concurrent messages
         """
-        client_id = message.tg_id or message.client_id
+        client_id = message.tg_id
         if not client_id:
             logger.error(f"No client ID provided in message: {message}")
             return {"error": "No client ID provided"}
@@ -49,9 +50,20 @@ class MessageQueueService:
                 "message": "Message skipped due to retry logic"
             }
         
-        # Step 2: Add to queue and handle aggregation
+        # Step 2: Check for existing messages and coordinate responses
+        coordination_result = self._coordinate_client_messages(message)
+        
+        if coordination_result.get("should_return_false"):
+            logger.info(f"Message should return FALSE due to newer messages for client_id={client_id}")
+            return {
+                "send_status": "FALSE", 
+                "queue_item_id": coordination_result["queue_item_id"],
+                "message": "Superseded by newer message"
+            }
+        
+        # Step 4: Add to queue and handle aggregation
         logger.debug(f"Adding message to queue for client_id={client_id}")
-        queue_item = self._add_to_queue(message)
+        queue_item = coordination_result["queue_item"]
         
         # Update client last activity
         logger.debug(f"Updating client activity for client_id={client_id}")
@@ -69,7 +81,7 @@ class MessageQueueService:
         Determine if message should be processed based on retry logic
         From spec: if (retry = false) or (retry = true and count != 0) - process
         """
-        client_id = message.tg_id or message.client_id
+        client_id = message.tg_id
         should_process = False
         
         if not message.retry:
@@ -166,50 +178,49 @@ class MessageQueueService:
         logger.debug(f"Client {client_id} processing status: {is_processing}")
         return is_processing
 
-    def _add_to_queue(self, message: SendPulseMessage) -> MessageQueueItem:
+    def _coordinate_client_messages(self, message: SendPulseMessage) -> Dict[str, Any]:
         """
-        Add message to queue - handles both normal queuing and batching during processing
+        Coordinate messages for a client to ensure proper send_status behavior:
+        - Mark previous pending/processing messages to return FALSE
+        - Create/update queue item for current message  
+        - Return coordination instructions
         """
-        client_id = message.tg_id or message.client_id
+        client_id = message.tg_id
         
-        # Check if client is currently processing a message
-        if self.is_client_currently_processing(message.project_id, client_id):
-            logger.info(f"Client {client_id} is currently processing - queuing new message for later batching")
-            # Just queue the message as-is, it will be batched after current processing completes
-            aggregated_text = message.response
-        else:
-            logger.debug(f"Looking for existing pending messages for client_id={client_id}")
-            # Get existing pending messages for this client
-            existing_messages = self.db.query(MessageQueue).filter(
-                and_(
-                    MessageQueue.project_id == message.project_id,
-                    MessageQueue.client_id == client_id,
-                    MessageQueue.status == MessageStatus.PENDING
-                )
-            ).all()
+        # Get all pending and processing messages for this client
+        existing_messages = self.db.query(MessageQueue).filter(
+            and_(
+                MessageQueue.project_id == message.project_id,
+                MessageQueue.client_id == client_id,
+                MessageQueue.status.in_([MessageStatus.PENDING, MessageStatus.PROCESSING])
+            )
+        ).all()
+        
+        logger.debug(f"Found {len(existing_messages)} existing messages for client_id={client_id}")
+        
+        # If there are existing messages, mark them to return FALSE
+        if existing_messages:
+            logger.info(f"Marking {len(existing_messages)} existing messages to return FALSE for client_id={client_id}")
             
-            # If there are existing pending messages, aggregate them
-            if existing_messages:
-                logger.info(f"Found {len(existing_messages)} existing pending messages for client_id={client_id}, aggregating")
-                # Mark all existing messages as cancelled
-                for msg in existing_messages:
-                    msg.status = MessageStatus.CANCELLED
-                    msg.updated_at = datetime.utcnow()
-                    logger.debug(f"Cancelled existing message {msg.id} for client_id={client_id}")
-                
-                # Create aggregated message
-                aggregated_text = " ".join([msg.aggregated_message for msg in existing_messages])
-                aggregated_text += " " + message.response
-                
-                # Store aggregated message in Redis for quick access
-                redis_key = f"aggregated_{message.project_id}_{client_id}"
-                self.redis_client.setex(redis_key, 3600, aggregated_text)  # 1 hour expiry
-                logger.debug(f"Stored aggregated message in Redis for client_id={client_id}")
-            else:
-                logger.debug(f"No existing pending messages for client_id={client_id}")
-                aggregated_text = message.response
+            # Collect all message text for aggregation
+            all_messages = []
+            for msg in existing_messages:
+                all_messages.append(msg.aggregated_message)
+                # Mark existing messages as superseded (they should return FALSE)
+                msg.status = MessageStatus.SUPERSEDED  # We'll add this status
+                msg.updated_at = datetime.utcnow()
+                logger.debug(f"Marked message {msg.id} as superseded for client_id={client_id}")
+            
+            # Add current message to aggregation
+            all_messages.append(message.response)
+            aggregated_text = " ".join(all_messages)
+            
+            logger.info(f"Aggregating {len(all_messages)} messages for client_id={client_id}: '{aggregated_text[:100]}...'")
+        else:
+            logger.debug(f"No existing messages for client_id={client_id}, processing normally")
+            aggregated_text = message.response
         
-        # Create new queue item
+        # Create new queue item for current message
         queue_item_id = str(uuid.uuid4())
         logger.debug(f"Creating new queue item {queue_item_id} for client_id={client_id}")
         queue_item = MessageQueue(
@@ -228,7 +239,12 @@ class MessageQueueService:
         self.db.refresh(queue_item)
         
         logger.info(f"Queue item {queue_item_id} created successfully for client_id={client_id}")
-        return queue_item
+        
+        return {
+            "queue_item": queue_item,
+            "queue_item_id": queue_item_id,
+            "should_return_false": False  # Current message should be processed
+        }
     
     def get_message_for_processing(self, project_id: str, client_id: str) -> Optional[MessageQueueItem]:
         """Get the latest pending message for a client"""
@@ -362,6 +378,41 @@ class MessageQueueService:
             }
             for activity in activities
         ]
+    
+    def has_pending_messages(self, project_id: str, client_id: str) -> bool:
+        """
+        Check if client has any pending messages in queue
+        Used to determine correct send_status and count values
+        """
+        logger.debug(f"Checking for pending messages: project_id={project_id}, client_id={client_id}")
+        
+        pending_count = self.db.query(MessageQueue).filter(
+            and_(
+                MessageQueue.project_id == project_id,
+                MessageQueue.client_id == client_id,
+                MessageQueue.status == MessageStatus.PENDING
+            )
+        ).count()
+        
+        has_pending = pending_count > 0
+        logger.debug(f"Client {client_id} has {pending_count} pending messages")
+        return has_pending
+    
+    def check_if_message_superseded(self, message_id: str) -> bool:
+        """
+        Check if a message was marked as superseded during processing
+        This is used to coordinate send_status between concurrent webhook calls
+        """
+        logger.debug(f"Checking if message {message_id} was superseded")
+        
+        message = self.db.query(MessageQueue).filter(MessageQueue.id == message_id).first()
+        if not message:
+            logger.warning(f"Message {message_id} not found when checking superseded status")
+            return False
+        
+        is_superseded = message.status == MessageStatus.SUPERSEDED
+        logger.debug(f"Message {message_id} superseded status: {is_superseded}")
+        return is_superseded
     
     def get_queue_stats(self, project_id: str) -> Dict[str, int]:
         """Get queue statistics for a project"""

@@ -21,7 +21,8 @@ class SendPulseService:
         project_id: str,
         response_text: str,
         pic: str = "",
-        count: str = "0"
+        count: str = "0",
+        send_status: str = "TRUE"
     ) -> bool:
         """Send response back to SendPulse API"""
         try:
@@ -35,7 +36,7 @@ class SendPulseService:
                 "gpt_response": response_text,
                 "pic": pic,
                 "count": count,
-                "send_status": "TRUE"
+                "send_status": send_status
             }
             
             headers = {
@@ -44,7 +45,7 @@ class SendPulseService:
             }
             
             logger.info(f"Sending response to SendPulse API for client_id={client_id}")
-            logger.info(f"Response length: {len(response_text)} chars")
+            logger.info(f"Response length: {len(response_text)} chars, send_status: {send_status}, count: {count}")
             
             response = await self.client.post(
                 self.api_url,

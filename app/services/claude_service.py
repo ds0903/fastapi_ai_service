@@ -2,7 +2,7 @@ import json
 import asyncio
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-import anthropic
+from anthropic import AsyncAnthropic
 from sqlalchemy.orm import Session
 import logging
 
@@ -25,14 +25,14 @@ class ClaudeService:
     def __init__(self, db: Session):
         self.db = db
         try:
-            self.client1 = anthropic.Client(api_key=settings.claude_api_key_1)
-            self.client2 = anthropic.Client(api_key=settings.claude_api_key_2)
-            logger.debug("ClaudeService initialized with two API clients")
+            self.client1 = AsyncAnthropic(api_key=settings.claude_api_key_1)
+            self.client2 = AsyncAnthropic(api_key=settings.claude_api_key_2)
+            logger.debug("ClaudeService initialized with two async API clients")
         except Exception as e:
             logger.error(f"Failed to initialize Claude clients: {e}")
             raise
     
-    def _get_claude_client(self, counter: int) -> anthropic.Client:
+    def _get_claude_client(self, counter: int) -> AsyncAnthropic:
         """Get Claude client based on counter for load balancing"""
         client = self.client1 if counter % 2 == 0 else self.client2
         logger.debug(f"Selected Claude client {1 if counter % 2 == 0 else 2} for counter {counter}")
@@ -63,8 +63,8 @@ class ClaudeService:
         logger.info(f"Built intent detection prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug("Sending request to Claude for intent detection")
-            response = client.messages.create(
+            logger.debug("Sending async request to Claude for intent detection")
+            response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}]
@@ -85,7 +85,6 @@ class ClaudeService:
             
         except Exception as e:
             logger.error(f"Error in intent detection: {e}", exc_info=True)
-            # Default to waiting if Claude fails
             logger.warning("Falling back to default intent result (waiting=1)")
             return IntentDetectionResult(waiting=1)
     
@@ -114,8 +113,8 @@ class ClaudeService:
         logger.debug(f"Built service identification prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug("Sending request to Claude for service identification")
-            response = client.messages.create(
+            logger.debug("Sending async request to Claude for service identification")
+            response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=500,
                 messages=[{"role": "user", "content": prompt}]
@@ -137,7 +136,6 @@ class ClaudeService:
             
         except Exception as e:
             logger.error(f"Error in service identification: {e}", exc_info=True)
-            # Default fallback
             logger.warning("Falling back to default service result (unknown, 1 slot)")
             return ServiceIdentificationResult(time_fraction=1, service_name="unknown")
     
@@ -179,8 +177,8 @@ class ClaudeService:
         logger.debug(f"Built main response prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug("Sending request to Claude for main response generation")
-            response = client.messages.create(
+            logger.debug("Sending async request to Claude for main response generation")
+            response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}]
@@ -209,7 +207,6 @@ class ClaudeService:
             
         except Exception as e:
             logger.error(f"Error in generate_main_response: {e}", exc_info=True)
-            # Fallback response
             logger.warning("Falling back to default error response")
             return ClaudeMainResponse(
                 gpt_response="Извините, произошла ошибка. Попробуйте еще раз позже."
@@ -230,7 +227,7 @@ class ClaudeService:
         prompt = self._build_compression_prompt(project_config, dialogue_history)
         
         try:
-            response = client.messages.create(
+            response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}]
@@ -239,7 +236,7 @@ class ClaudeService:
             return response.content[0].text.strip()
             
         except Exception as e:
-            return dialogue_history[:500] + "..."  # Simple truncation fallback
+            return dialogue_history[:500] + "..."
     
     def _build_intent_detection_prompt(
         self,

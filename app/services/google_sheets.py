@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, date, time, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
+import asyncio
 import logging
 
 from ..config import settings, ProjectConfig
@@ -58,6 +59,20 @@ class GoogleSheetsService:
             logger.error(f"Failed to create Google Sheets client: {e}")
             raise
     
+    async def sync_bookings_to_sheets_async(self, db: Session) -> bool:
+        """Async wrapper for sync_bookings_to_sheets"""
+        if not self.spreadsheet:
+            logger.warning("Cannot sync bookings: no spreadsheet connection")
+            return False
+        
+        logger.info(f"Starting async booking sync to Google Sheets for project {self.project_config.project_id}")
+        
+        try:
+            return await asyncio.to_thread(self.sync_bookings_to_sheets, db)
+        except Exception as e:
+            logger.error(f"Error in async booking sync: {e}", exc_info=True)
+            return False
+    
     def sync_bookings_to_sheets(self, db: Session) -> bool:
         """Sync all bookings from database to Google Sheets"""
         if not self.spreadsheet:
@@ -109,7 +124,7 @@ class GoogleSheetsService:
             return sync_success
             
         except Exception as e:
-            logger.error(f"Error syncing bookings to sheets: {e}", exc_info=True)
+            logger.error(f"Error syncing bookings to Google Sheets: {e}", exc_info=True)
             return False
     
     def _update_specialist_worksheet(self, specialist_name: str, bookings: List[Booking]) -> None:
@@ -226,6 +241,14 @@ class GoogleSheetsService:
                 
                 first_row_of_day = False
     
+    async def get_available_slots_async(self, db: Session, target_date: date, time_fraction: int = 1) -> AvailableSlots:
+        """Async wrapper for get_available_slots"""
+        try:
+            return await asyncio.to_thread(self.get_available_slots, db, target_date, time_fraction)
+        except Exception as e:
+            logger.error(f"Error in async get_available_slots: {e}", exc_info=True)
+            return AvailableSlots(slots_by_specialist={})
+    
     def get_available_slots(self, db: Session, target_date: date, time_fraction: int) -> AvailableSlots:
         """Get available slots for a specific date"""
         # Get all bookings for the date
@@ -258,6 +281,24 @@ class GoogleSheetsService:
             date_of_checking=target_date.strftime("%d.%m"),
             slots_by_specialist=available_slots
         )
+    
+    async def get_available_slots_by_time_range_async(
+        self, 
+        db: Session, 
+        start_time: time, 
+        end_time: time, 
+        time_fraction: int = 1,
+        days_ahead: int = 7
+    ) -> AvailableSlots:
+        """Async wrapper for get_available_slots_by_time_range"""
+        try:
+            return await asyncio.to_thread(
+                self.get_available_slots_by_time_range, 
+                db, start_time, end_time, time_fraction
+            )
+        except Exception as e:
+            logger.error(f"Error in async get_available_slots_by_time_range: {e}", exc_info=True)
+            return AvailableSlots(slots_by_specialist={})
     
     def get_available_slots_by_time_range(
         self, 
@@ -414,6 +455,14 @@ class GoogleSheetsService:
             logger.error(f"Error creating dialogue document: {e}", exc_info=True)
             return None 
 
+    async def update_single_booking_slot_async(self, specialist_name: str, booking: Booking) -> bool:
+        """Async wrapper for update_single_booking_slot"""
+        try:
+            return await asyncio.to_thread(self.update_single_booking_slot, specialist_name, booking)
+        except Exception as e:
+            logger.error(f"Error in async update_single_booking_slot: {e}", exc_info=True)
+            return False
+
     def update_single_booking_slot(self, specialist_name: str, booking: Booking) -> bool:
         """Update only the specific row for a single booking without clearing the table"""
         if not self.spreadsheet:
@@ -470,6 +519,19 @@ class GoogleSheetsService:
             logger.error(f"Error updating single booking slot for {specialist_name}: {e}", exc_info=True)
             return False
 
+    async def clear_booking_slot_async(
+        self, 
+        specialist_name: str, 
+        booking_date: date, 
+        booking_time: time
+    ) -> bool:
+        """Async wrapper for clear_booking_slot"""
+        try:
+            return await asyncio.to_thread(self.clear_booking_slot, specialist_name, booking_date, booking_time)
+        except Exception as e:
+            logger.error(f"Error in async clear_booking_slot: {e}", exc_info=True)
+            return False
+
     def clear_booking_slot(self, specialist_name: str, booking_date: date, booking_time: time) -> bool:
         """Clear a specific booking slot (for cancellations)"""
         if not self.spreadsheet:
@@ -505,6 +567,22 @@ class GoogleSheetsService:
                 
         except Exception as e:
             logger.error(f"Error clearing booking slot for {specialist_name}: {e}", exc_info=True)
+            return False
+
+    async def is_slot_available_in_sheets_async(
+        self, 
+        specialist_name: str, 
+        booking_date: date, 
+        booking_time: time
+    ) -> bool:
+        """Async wrapper for is_slot_available_in_sheets"""
+        try:
+            return await asyncio.to_thread(
+                self.is_slot_available_in_sheets, 
+                specialist_name, booking_date, booking_time
+            )
+        except Exception as e:
+            logger.error(f"Error in async is_slot_available_in_sheets: {e}", exc_info=True)
             return False
 
     def is_slot_available_in_sheets(self, specialist_name: str, booking_date: date, booking_time: time) -> bool:

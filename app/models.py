@@ -9,6 +9,7 @@ class MessageStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
 
 
 class BookingAction(str, Enum):
@@ -23,7 +24,6 @@ class SendPulseMessage(BaseModel):
     count: int = Field(default=0, description="Counter for handling message floods")
     retry: bool = Field(default=False, description="Whether this is a retry attempt")
     tg_id: Optional[str] = Field(None, description="Telegram client ID")
-    client_id: Optional[str] = Field(None, description="Generic client ID")
     response: str = Field(..., description="Message text from client")
     project_id: str = Field(..., description="Project identifier")
 
@@ -130,11 +130,11 @@ class FeedbackRecord(BaseModel):
 
 class WebhookResponse(BaseModel):
     """Response sent back to SendPulse"""
-    gpt_response: Optional[str] = None
-    pic: Optional[str] = None
-    status: str = Field(default="200")
+    gpt_response: str = Field(..., description="Response text to send to client")
+    pic: str = Field(default="", description="Picture URL, empty string if no picture")
+    status: str = Field(default="200", description="HTTP status code")
     send_status: str = Field(..., description="TRUE or FALSE")
-    count: str = Field(..., description="Message count as string")
+    count: Optional[str] = Field(None, description="Error count as string, None if no errors but FALSE status, 0 if TRUE status")
 
 
 class ErrorResponse(BaseModel):
