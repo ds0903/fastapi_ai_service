@@ -67,7 +67,7 @@ class ClaudeService:
         logger.info(f"Message ID: {message_id} - Built intent detection prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug(f"Message ID: {message_id} - Sending async request to Claude for intent detection")
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for intent detection. Dialogue history: {dialogue_history}, current message: {current_message}")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=1000,
@@ -120,7 +120,7 @@ class ClaudeService:
         logger.debug(f"Message ID: {message_id} - Built service identification prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug(f"Message ID: {message_id} - Sending async request to Claude for service identification")
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for service identification. Dialogue history: {dialogue_history}, current message: {current_message}")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=500,
@@ -187,7 +187,7 @@ class ClaudeService:
         logger.debug(f"Message ID: {message_id} - Built main response prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug(f"Message ID: {message_id} - Sending async request to Claude for main response generation")
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for main response generation. Dialogue history: {dialogue_history}, current message: {current_message}, current date: {current_date}, available slots: {available_slots}, reserved slots: {reserved_slots}, rows of owner: {rows_of_owner}, zip history: {zip_history}, record error: {record_error}")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=2000,
