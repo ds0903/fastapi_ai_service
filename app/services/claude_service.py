@@ -41,6 +41,20 @@ class ClaudeService:
             logger.debug(f"Selected Claude client {1 if counter % 2 == 0 else 2} for counter {counter}")
         return client
     
+    def _truncate_dialogue_for_logging(self, dialogue_history: str) -> str:
+        """Truncate dialogue history to last 3 messages for logging purposes"""
+        if not dialogue_history.strip():
+            return "No dialogue history"
+        
+        lines = dialogue_history.strip().split('\n')
+        # Take last 3 lines (should be Client-Claude-Client pattern)
+        last_lines = lines[-3:] if len(lines) >= 3 else lines
+        
+        if len(lines) > 3:
+            return f"...{len(lines)-3} earlier messages...\n" + '\n'.join(last_lines)
+        else:
+            return '\n'.join(last_lines)
+    
     async def detect_intent(
         self, 
         project_config: ProjectConfig,
@@ -67,7 +81,8 @@ class ClaudeService:
         logger.info(f"Message ID: {message_id} - Built intent detection prompt, length: {len(prompt)} characters")
         
         try:
-            logger.info(f"Message ID: {message_id} - Sending async request to Claude for intent detection. Dialogue history: {dialogue_history}, current message: {current_message}")
+            truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for intent detection. Dialogue history: {truncated_history}, current message: {current_message}")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=1000,
@@ -120,7 +135,8 @@ class ClaudeService:
         logger.debug(f"Message ID: {message_id} - Built service identification prompt, length: {len(prompt)} characters")
         
         try:
-            logger.info(f"Message ID: {message_id} - Sending async request to Claude for service identification. Dialogue history: {dialogue_history}, current message: {current_message}")
+            truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for service identification. Dialogue history: {truncated_history}, current message: {current_message}")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=500,
@@ -187,7 +203,8 @@ class ClaudeService:
         logger.debug(f"Message ID: {message_id} - Built main response prompt, length: {len(prompt)} characters")
         
         try:
-            logger.info(f"Message ID: {message_id} - Sending async request to Claude for main response generation. Dialogue history: {dialogue_history}, current message: {current_message}, current date: {current_date}, available slots: {available_slots}, reserved slots: {reserved_slots}, rows of owner: {rows_of_owner}, zip history: {zip_history}, record error: {record_error}")
+            truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for main response generation. Dialogue history: {truncated_history}, current message: {current_message}, current date: {current_date}, available slots: {available_slots}, reserved slots: {reserved_slots}, rows of owner: {rows_of_owner}, zip history: {zip_history}, record error: {record_error}")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=2000,
