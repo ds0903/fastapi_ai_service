@@ -21,54 +21,54 @@ class BookingService:
         self.sheets_service = GoogleSheetsService(project_config)
         logger.debug(f"BookingService initialized for project {project_config.project_id}")
     
-    async def process_booking_action(self, claude_response: ClaudeMainResponse, client_id: str) -> Dict[str, Any]:
+    async def process_booking_action(self, claude_response: ClaudeMainResponse, client_id: str, message_id: str) -> Dict[str, Any]:
         """Process booking action from Claude response"""
-        logger.info(f"Processing booking action for client_id={client_id}")
-        logger.debug(f"Booking action details: activate={claude_response.activate_booking}, reject={claude_response.reject_order}, change={claude_response.change_order}")
+        logger.info(f"Message ID: {message_id} - Processing booking action for client_id={client_id}")
+        logger.debug(f"Message ID: {message_id} - Booking action details: activate={claude_response.activate_booking}, reject={claude_response.reject_order}, change={claude_response.change_order}")
         
         result = {"success": False, "message": "", "action": None}
         
         try:
             if claude_response.activate_booking:
-                logger.info(f"Processing booking activation for client_id={client_id}")
-                result = await self._activate_booking(claude_response, client_id)
+                logger.info(f"Message ID: {message_id} - Processing booking activation for client_id={client_id}")
+                result = await self._activate_booking(claude_response, client_id, message_id)
                 result["action"] = "activate"
             elif claude_response.reject_order:
-                logger.info(f"Processing booking rejection for client_id={client_id}")
-                result = await self._reject_booking(claude_response, client_id)
+                logger.info(f"Message ID: {message_id} - Processing booking rejection for client_id={client_id}")
+                result = await self._reject_booking(claude_response, client_id, message_id)
                 result["action"] = "reject"
             elif claude_response.change_order:
-                logger.info(f"Processing booking change for client_id={client_id}")
-                result = await self._change_booking(claude_response, client_id)
+                logger.info(f"Message ID: {message_id} - Processing booking change for client_id={client_id}")
+                result = await self._change_booking(claude_response, client_id, message_id)
                 result["action"] = "change"
             else:
-                logger.debug(f"No booking action required for client_id={client_id}")
+                logger.debug(f"Message ID: {message_id} - No booking action required for client_id={client_id}")
                 result = {"success": True, "message": "No booking action required", "action": "none"}
             
             # Save feedback if provided
             if claude_response.feedback:
-                logger.info(f"Saving client feedback for client_id={client_id}")
-                self._save_feedback(claude_response, client_id)
+                logger.info(f"Message ID: {message_id} - Saving client feedback for client_id={client_id}")
+                self._save_feedback(claude_response, client_id, message_id)
             
-            logger.info(f"Booking action completed for client_id={client_id}: {result['action']} - success={result['success']}")
+            logger.info(f"Message ID: {message_id} - Booking action completed for client_id={client_id}: {result['action']} - success={result['success']}")
             return result
             
         except Exception as e:
-            logger.error(f"Error processing booking action for client_id={client_id}: {e}", exc_info=True)
+            logger.error(f"Message ID: {message_id} - Error processing booking action for client_id={client_id}: {e}", exc_info=True)
             return {
                 "success": False,
                 "message": f"Ошибка при обработке заказа: {str(e)}",
                 "action": "error"
             }
     
-    async def _activate_booking(self, response: ClaudeMainResponse, client_id: str) -> Dict[str, Any]:
+    async def _activate_booking(self, response: ClaudeMainResponse, client_id: str, message_id: str) -> Dict[str, Any]:
         """Activate a new booking"""
-        logger.info(f"Activating booking for client_id={client_id}")
+        logger.info(f"Message ID: {message_id} - Activating booking for client_id={client_id}")
         
         try:
             # Validate required fields
             if not response.cosmetolog or not response.date_order or not response.time_set_up:
-                logger.warning(f"Missing required booking fields for client_id={client_id}: specialist={response.cosmetolog}, date={response.date_order}, time={response.time_set_up}")
+                logger.warning(f"Message ID: {message_id} - Missing required booking fields for client_id={client_id}: specialist={response.cosmetolog}, date={response.date_order}, time={response.time_set_up}")
                 return {
                     "success": False,
                     "message": "Недостаточно данных для создания записи"
@@ -81,7 +81,7 @@ class BookingService:
                 try:
                     booking_date = datetime.strptime(response.date_order, "%d.%m").date().replace(year=datetime.now().year)
                 except ValueError:
-                    logger.warning(f"Invalid date format for client_id={client_id}: {response.date_order}")
+                    logger.warning(f"Message ID: {message_id} - Invalid date format for client_id={client_id}: {response.date_order}")
                     return {
                         "success": False,
                         "message": f"Неверный формат даты: {response.date_order}"
@@ -90,7 +90,7 @@ class BookingService:
             try:
                 booking_time = datetime.strptime(response.time_set_up, "%H:%M").time()
             except ValueError:
-                logger.warning(f"Invalid time format for client_id={client_id}: {response.time_set_up}")
+                logger.warning(f"Message ID: {message_id} - Invalid time format for client_id={client_id}: {response.time_set_up}")
                 return {
                     "success": False,
                     "message": f"Неверный формат времени: {response.time_set_up}"
@@ -98,7 +98,7 @@ class BookingService:
             
             # Check if specialist exists
             if response.cosmetolog not in self.project_config.specialists:
-                logger.warning(f"Unknown specialist requested: {response.cosmetolog}, available: {self.project_config.specialists}")
+                logger.warning(f"Message ID: {message_id} - Unknown specialist requested: {response.cosmetolog}, available: {self.project_config.specialists}")
                 return {
                     "success": False,
                     "message": f"Специалист {response.cosmetolog} не найден"
@@ -108,16 +108,16 @@ class BookingService:
             duration_slots = 1
             if response.procedure and response.procedure in self.project_config.services:
                 duration_slots = self.project_config.services[response.procedure]
-                logger.info(f"Service '{response.procedure}' requires {duration_slots} slots ({duration_slots * 30} minutes)")
+                logger.info(f"Message ID: {message_id} - Service '{response.procedure}' requires {duration_slots} slots ({duration_slots * 30} minutes)")
             else:
-                logger.warning(f"Unknown service '{response.procedure}', using default duration: 1 slot (30 minutes). Available services: {list(self.project_config.services.keys())}")
+                logger.warning(f"Message ID: {message_id} - Unknown service '{response.procedure}', using default duration: 1 slot (30 minutes). Available services: {list(self.project_config.services.keys())}")
             
             # Check if time slot is available (double-check both database and Google Sheets)
-            logger.debug(f"Checking slot availability: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}, duration={duration_slots}")
+            logger.debug(f"Message ID: {message_id} - Checking slot availability: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}, duration={duration_slots}")
             
             # Check database availability first
             if not self._is_slot_available(response.cosmetolog, booking_date, booking_time, duration_slots):
-                logger.warning(f"Time slot not available in database: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}")
+                logger.warning(f"Message ID: {message_id} - Time slot not available in database: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}")
                 return {
                     "success": False,
                     "message": "Выбранное время уже занято"
@@ -126,20 +126,20 @@ class BookingService:
             # Double-check with Google Sheets to prevent race conditions (async)
             try:
                 if not await self.sheets_service.is_slot_available_in_sheets_async(response.cosmetolog, booking_date, booking_time):
-                    logger.warning(f"Time slot not available in Google Sheets: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}")
+                    logger.warning(f"Message ID: {message_id} - Time slot not available in Google Sheets: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}")
                     return {
                         "success": False,
                         "message": "Выбранное время уже занято"
                     }
             except Exception as sheets_check_error:
-                logger.warning(f"Could not verify slot availability in Google Sheets: {sheets_check_error}")
+                logger.warning(f"Message ID: {message_id} - Could not verify slot availability in Google Sheets: {sheets_check_error}")
                 # Continue with booking if sheets check fails
             
             # Create booking
             end_time = datetime.combine(booking_date, booking_time) + timedelta(minutes=30 * duration_slots)
-            logger.info(f"Creating new booking: client_id={client_id}, specialist={response.cosmetolog}")
-            logger.info(f"  Service: {response.procedure} ({duration_slots} slots)")
-            logger.info(f"  Time: {booking_date} {booking_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
+            logger.info(f"Message ID: {message_id} - Creating new booking: client_id={client_id}, specialist={response.cosmetolog}")
+            logger.info(f"Message ID: {message_id} -   Service: {response.procedure} ({duration_slots} slots)")
+            logger.info(f"Message ID: {message_id} -   Time: {booking_date} {booking_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
             
             booking = Booking(
                 project_id=self.project_config.project_id,
@@ -158,18 +158,18 @@ class BookingService:
             self.db.commit()
             self.db.refresh(booking)
             
-            logger.info(f"Booking created successfully: booking_id={booking.id}, client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Booking created successfully: booking_id={booking.id}, client_id={client_id}")
             
             # Update Google Sheets - targeted update for this specific booking (async)
             try:
-                logger.debug(f"Updating specific booking slot {booking.id} in Google Sheets")
+                logger.debug(f"Message ID: {message_id} - Updating specific booking slot {booking.id} in Google Sheets")
                 sheets_success = await self.sheets_service.update_single_booking_slot_async(booking.specialist_name, booking)
                 if sheets_success:
-                    logger.debug("Google Sheets slot update completed successfully")
+                    logger.debug(f"Message ID: {message_id} - Google Sheets slot update completed successfully")
                 else:
-                    logger.warning("Google Sheets slot update returned false")
+                    logger.warning(f"Message ID: {message_id} - Google Sheets slot update returned false")
             except Exception as sheets_error:
-                logger.error(f"Failed to update booking slot in Google Sheets: {sheets_error}")
+                logger.error(f"Message ID: {message_id} - Failed to update booking slot in Google Sheets: {sheets_error}")
                 # Don't fail the booking for sheets sync issues
             
             return {
@@ -179,13 +179,13 @@ class BookingService:
             }
             
         except Exception as e:
-            logger.error(f"Error creating booking for client_id={client_id}: {e}", exc_info=True)
+            logger.error(f"Message ID: {message_id} - Error creating booking for client_id={client_id}: {e}", exc_info=True)
             return {
                 "success": False,
                 "message": f"Ошибка при создании записи: {str(e)}"
             }
     
-    async def _reject_booking(self, response: ClaudeMainResponse, client_id: str) -> Dict[str, Any]:
+    async def _reject_booking(self, response: ClaudeMainResponse, client_id: str, message_id: str) -> Dict[str, Any]:
         """Reject/cancel a booking"""
         try:
             # Validate required fields for rejection
@@ -230,18 +230,18 @@ class BookingService:
             
             # Clear the specific booking slot in Google Sheets
             try:
-                logger.debug(f"Clearing booking slot in Google Sheets for {booking.specialist_name}")
+                logger.debug(f"Message ID: {message_id} - Clearing booking slot in Google Sheets for {booking.specialist_name}")
                 sheets_success = await self.sheets_service.clear_booking_slot_async(
                     booking.specialist_name, 
                     booking.date, 
                     booking.time
                 )
                 if sheets_success:
-                    logger.debug("Google Sheets slot cleared successfully")
+                    logger.debug(f"Message ID: {message_id} - Google Sheets slot cleared successfully")
                 else:
-                    logger.warning("Google Sheets slot clearing returned false")
+                    logger.warning(f"Message ID: {message_id} - Google Sheets slot clearing returned false")
             except Exception as sheets_error:
-                logger.error(f"Failed to clear booking slot in Google Sheets: {sheets_error}")
+                logger.error(f"Message ID: {message_id} - Failed to clear booking slot in Google Sheets: {sheets_error}")
                 # Don't fail the cancellation for sheets issues
             
             return {
@@ -256,7 +256,7 @@ class BookingService:
                 "message": f"Ошибка при отмене записи: {str(e)}"
             }
     
-    async def _change_booking(self, response: ClaudeMainResponse, client_id: str) -> Dict[str, Any]:
+    async def _change_booking(self, response: ClaudeMainResponse, client_id: str, message_id: str) -> Dict[str, Any]:
         """Change an existing booking"""
         try:
             # First, find the old booking to change
@@ -333,18 +333,18 @@ class BookingService:
             # Update Google Sheets - clear old slot and add new slot
             try:
                 # Clear the old booking slot
-                logger.debug(f"Clearing old booking slot: {old_specialist} {old_date} {old_time}")
+                logger.debug(f"Message ID: {message_id} - Clearing old booking slot: {old_specialist} {old_date} {old_time}")
                 await self.sheets_service.clear_booking_slot_async(old_specialist, old_date, old_time)
                 
                 # Add the new booking slot
-                logger.debug(f"Adding new booking slot: {old_booking.specialist_name} {new_date} {new_time}")
+                logger.debug(f"Message ID: {message_id} - Adding new booking slot: {old_booking.specialist_name} {new_date} {new_time}")
                 sheets_success = await self.sheets_service.update_single_booking_slot_async(old_booking.specialist_name, old_booking)
                 if sheets_success:
-                    logger.debug("Google Sheets booking change completed successfully")
+                    logger.debug(f"Message ID: {message_id} - Google Sheets booking change completed successfully")
                 else:
-                    logger.warning("Google Sheets booking change returned false")
+                    logger.warning(f"Message ID: {message_id} - Google Sheets booking change returned false")
             except Exception as sheets_error:
-                logger.error(f"Failed to update booking change in Google Sheets: {sheets_error}")
+                logger.error(f"Message ID: {message_id} - Failed to update booking change in Google Sheets: {sheets_error}")
                 # Don't fail the booking change for sheets issues
             
             return {
@@ -457,9 +457,10 @@ class BookingService:
         
         return "\n".join(booking_strings)
     
-    def _save_feedback(self, response: ClaudeMainResponse, client_id: str) -> None:
+    def _save_feedback(self, response: ClaudeMainResponse, client_id: str, message_id: str) -> None:
         """Save client feedback"""
         try:
+            logger.debug(f"Message ID: {message_id} - Creating feedback record for client_id={client_id}")
             feedback = Feedback(
                 project_id=self.project_config.project_id,
                 client_id=client_id,
@@ -471,9 +472,10 @@ class BookingService:
             
             self.db.add(feedback)
             self.db.commit()
+            logger.info(f"Message ID: {message_id} - Feedback saved successfully for client_id={client_id}")
             
         except Exception as e:
-            print(f"Error saving feedback: {e}")
+            logger.error(f"Message ID: {message_id} - Error saving feedback for client_id={client_id}: {e}")
     
     def get_booking_stats(self) -> Dict[str, Any]:
         """Get booking statistics for the project"""

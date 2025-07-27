@@ -32,27 +32,31 @@ class ClaudeService:
             logger.error(f"Failed to initialize Claude clients: {e}")
             raise
     
-    def _get_claude_client(self, counter: int) -> AsyncAnthropic:
+    def _get_claude_client(self, counter: int, message_id: str = None) -> AsyncAnthropic:
         """Get Claude client based on counter for load balancing"""
         client = self.client1 if counter % 2 == 0 else self.client2
-        logger.debug(f"Selected Claude client {1 if counter % 2 == 0 else 2} for counter {counter}")
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Selected Claude client {1 if counter % 2 == 0 else 2} for counter {counter}")
+        else:
+            logger.debug(f"Selected Claude client {1 if counter % 2 == 0 else 2} for counter {counter}")
         return client
     
     async def detect_intent(
         self, 
         project_config: ProjectConfig,
         dialogue_history: str,
-        current_message: str
+        current_message: str,
+        message_id: str
     ) -> IntentDetectionResult:
         """
         Module 1: Intent detection
         Determines if client wants to book, specified date, or time preferences
         """
-        logger.info(f"Starting intent detection for project {project_config.project_id}")
-        logger.debug(f"Message for intent detection: '{current_message[:100]}...'")
+        logger.info(f"Message ID: {message_id} - Starting intent detection for project {project_config.project_id}")
+        logger.debug(f"Message ID: {message_id} - Message for intent detection: '{current_message[:100]}...'")
         
         counter = increment_counter(self.db)
-        client = self._get_claude_client(counter)
+        client = self._get_claude_client(counter, message_id)
         
         prompt = self._build_intent_detection_prompt(
             project_config, 
@@ -60,10 +64,10 @@ class ClaudeService:
             current_message
         )
         
-        logger.info(f"Built intent detection prompt, length: {len(prompt)} characters")
+        logger.info(f"Message ID: {message_id} - Built intent detection prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug("Sending async request to Claude for intent detection")
+            logger.debug(f"Message ID: {message_id} - Sending async request to Claude for intent detection")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=1000,
@@ -71,38 +75,41 @@ class ClaudeService:
             )
             
             raw_response = response.content[0].text
-            logger.info(f"Intent detection response length: {len(raw_response)} chars")
+            logger.info(f"Message ID: {message_id} - Claude raw response for intent detection: {raw_response}")
+            logger.info(f"Message ID: {message_id} - Intent detection response length: {len(raw_response)} chars")
             
             if not raw_response.strip():
-                logger.warning("Intent detection received empty response from Claude")
+                logger.warning(f"Message ID: {message_id} - Intent detection received empty response from Claude")
                 return IntentDetectionResult(waiting=1)
             
-            result = self._parse_intent_response(raw_response)
+            result = self._parse_intent_response(raw_response, message_id)
             intent_result = IntentDetectionResult(**result)
             
-            logger.info(f"Intent detection completed: waiting={intent_result.waiting}, date_order={intent_result.date_order}, time_range={intent_result.desire_time0}-{intent_result.desire_time1}")
+            logger.info(f"Message ID: {message_id} - Claude thinking parsed result: {result}")
+            logger.info(f"Message ID: {message_id} - Intent detection completed: waiting={intent_result.waiting}, date_order={intent_result.date_order}, time_range={intent_result.desire_time0}-{intent_result.desire_time1}")
             return intent_result
             
         except Exception as e:
-            logger.error(f"Error in intent detection: {e}", exc_info=True)
-            logger.warning("Falling back to default intent result (waiting=1)")
+            logger.error(f"Message ID: {message_id} - Error in intent detection: {e}", exc_info=True)
+            logger.warning(f"Message ID: {message_id} - Falling back to default intent result (waiting=1)")
             return IntentDetectionResult(waiting=1)
     
     async def identify_service(
         self,
         project_config: ProjectConfig,
         dialogue_history: str,
-        current_message: str
+        current_message: str,
+        message_id: str
     ) -> ServiceIdentificationResult:
         """
         Module 2: Service identification
         Determines which service client wants and its duration
         """
-        logger.info(f"Starting service identification for project {project_config.project_id}")
-        logger.debug(f"Available services: {list(project_config.services.keys())}")
+        logger.info(f"Message ID: {message_id} - Starting service identification for project {project_config.project_id}")
+        logger.debug(f"Message ID: {message_id} - Available services: {list(project_config.services.keys())}")
         
         counter = increment_counter(self.db)
-        client = self._get_claude_client(counter)
+        client = self._get_claude_client(counter, message_id)
         
         prompt = self._build_service_identification_prompt(
             project_config,
@@ -110,10 +117,10 @@ class ClaudeService:
             current_message
         )
         
-        logger.debug(f"Built service identification prompt, length: {len(prompt)} characters")
+        logger.debug(f"Message ID: {message_id} - Built service identification prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug("Sending async request to Claude for service identification")
+            logger.debug(f"Message ID: {message_id} - Sending async request to Claude for service identification")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=500,
@@ -121,22 +128,24 @@ class ClaudeService:
             )
             
             raw_response = response.content[0].text
-            logger.info(f"Service identification response length: {len(raw_response)} chars")
+            logger.info(f"Message ID: {message_id} - Claude raw response for service identification: {raw_response}")
+            logger.info(f"Message ID: {message_id} - Service identification response length: {len(raw_response)} chars")
             
             if not raw_response.strip():
-                logger.warning("Service identification received empty response from Claude")
+                logger.warning(f"Message ID: {message_id} - Service identification received empty response from Claude")
                 return ServiceIdentificationResult(time_fraction=1, service_name="unknown")
             
-            result = self._parse_service_response(raw_response)
+            result = self._parse_service_response(raw_response, message_id)
             service_result = ServiceIdentificationResult(**result)
             
+            logger.info(f"Message ID: {message_id} - Claude thinking parsed result: {result}")
             duration_minutes = service_result.time_fraction * 30
-            logger.info(f"Service identification completed: service='{service_result.service_name}', duration={service_result.time_fraction} slots ({duration_minutes} minutes)")
+            logger.info(f"Message ID: {message_id} - Service identification completed: service='{service_result.service_name}', duration={service_result.time_fraction} slots ({duration_minutes} minutes)")
             return service_result
             
         except Exception as e:
-            logger.error(f"Error in service identification: {e}", exc_info=True)
-            logger.warning("Falling back to default service result (unknown, 1 slot)")
+            logger.error(f"Message ID: {message_id} - Error in service identification: {e}", exc_info=True)
+            logger.warning(f"Message ID: {message_id} - Falling back to default service result (unknown, 1 slot)")
             return ServiceIdentificationResult(time_fraction=1, service_name="unknown")
     
     async def generate_main_response(
@@ -148,6 +157,7 @@ class ClaudeService:
         available_slots: Dict[str, Any],
         reserved_slots: Dict[str, Any],
         rows_of_owner: str,
+        message_id: str,
         zip_history: Optional[str] = None,
         record_error: Optional[str] = None
     ) -> ClaudeMainResponse:
@@ -155,12 +165,12 @@ class ClaudeService:
         Module 3: Main response generation
         Core module that generates client response and booking commands
         """
-        logger.info(f"Starting main response generation for project {project_config.project_id}")
-        logger.debug(f"Available slots count: {len(available_slots)}, reserved slots count: {len(reserved_slots)}")
-        logger.debug(f"Current message: '{current_message[:100]}...'")
+        logger.info(f"Message ID: {message_id} - Starting main response generation for project {project_config.project_id}")
+        logger.debug(f"Message ID: {message_id} - Available slots count: {len(available_slots)}, reserved slots count: {len(reserved_slots)}")
+        logger.debug(f"Message ID: {message_id} - Current message: '{current_message[:100]}...'")
         
         counter = increment_counter(self.db)
-        client = self._get_claude_client(counter)
+        client = self._get_claude_client(counter, message_id)
         
         prompt = self._build_main_response_prompt(
             project_config,
@@ -174,10 +184,10 @@ class ClaudeService:
             record_error
         )
         
-        logger.debug(f"Built main response prompt, length: {len(prompt)} characters")
+        logger.debug(f"Message ID: {message_id} - Built main response prompt, length: {len(prompt)} characters")
         
         try:
-            logger.debug("Sending async request to Claude for main response generation")
+            logger.debug(f"Message ID: {message_id} - Sending async request to Claude for main response generation")
             response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=2000,
@@ -185,29 +195,31 @@ class ClaudeService:
             )
             
             raw_response = response.content[0].text
-            logger.info(f"Main response length: {len(raw_response)} chars")
+            logger.info(f"Message ID: {message_id} - Claude raw response for main response: {raw_response}")
+            logger.info(f"Message ID: {message_id} - Main response length: {len(raw_response)} chars")
             
             if not raw_response.strip():
-                logger.warning("Main response received empty response from Claude")
+                logger.warning(f"Message ID: {message_id} - Main response received empty response from Claude")
                 return ClaudeMainResponse(gpt_response="Извините, произошла ошибка. Попробуйте еще раз позже.")
             
-            result = self._parse_main_response(raw_response)
+            result = self._parse_main_response(raw_response, message_id)
             main_response = ClaudeMainResponse(**result)
             
-            logger.info(f"Main response generated successfully: {len(main_response.gpt_response)} chars, booking actions: activate={main_response.activate_booking}, reject={main_response.reject_order}, change={main_response.change_order}")
+            logger.info(f"Message ID: {message_id} - Claude thinking parsed result: {result}")
+            logger.info(f"Message ID: {message_id} - Main response generated successfully: {len(main_response.gpt_response)} chars, booking actions: activate={main_response.activate_booking}, reject={main_response.reject_order}, change={main_response.change_order}")
             
             if main_response.activate_booking:
-                logger.info(f"Booking activation requested: specialist={main_response.cosmetolog}, date={main_response.date_order}, time={main_response.time_set_up}")
+                logger.info(f"Message ID: {message_id} - Booking activation requested: specialist={main_response.cosmetolog}, date={main_response.date_order}, time={main_response.time_set_up}")
             elif main_response.reject_order:
-                logger.info(f"Booking rejection requested: date={main_response.date_reject}, time={main_response.time_reject}")
+                logger.info(f"Message ID: {message_id} - Booking rejection requested: date={main_response.date_reject}, time={main_response.time_reject}")
             elif main_response.change_order:
-                logger.info(f"Booking change requested: new specialist={main_response.cosmetolog}, new date={main_response.date_order}")
+                logger.info(f"Message ID: {message_id} - Booking change requested: new specialist={main_response.cosmetolog}, new date={main_response.date_order}")
             
             return main_response
             
         except Exception as e:
-            logger.error(f"Error in generate_main_response: {e}", exc_info=True)
-            logger.warning("Falling back to default error response")
+            logger.error(f"Message ID: {message_id} - Error in generate_main_response: {e}", exc_info=True)
+            logger.warning(f"Message ID: {message_id} - Falling back to default error response")
             return ClaudeMainResponse(
                 gpt_response="Извините, произошла ошибка. Попробуйте еще раз позже."
             )
@@ -318,47 +330,54 @@ class ClaudeService:
         {dialogue_history}
         """
     
-    def _parse_intent_response(self, response: str) -> Dict[str, Any]:
+    def _parse_intent_response(self, response: str, message_id: str) -> Dict[str, Any]:
         """Parse intent detection response"""
         try:
+            logger.debug(f"Message ID: {message_id} - Parsing intent response: {response[:200]}...")
             # Handle "json{...}" prefix that Claude sometimes adds
             clean_response = response.strip()
             if clean_response.startswith("json"):
                 clean_response = clean_response[4:].strip()
             
             result = json.loads(clean_response)
-            return {
+            parsed_result = {
                 "waiting": result.get("waiting"),
                 "date_order": result.get("date_order"),
                 "desire_time0": result.get("desire_time0"),
                 "desire_time1": result.get("desire_time1")
             }
+            logger.debug(f"Message ID: {message_id} - Intent response parsed successfully: {parsed_result}")
+            return parsed_result
         except Exception as e:
-            logger.error(f"Failed to parse intent response JSON: {e}")
-            logger.warning(f"Raw response was: '{response[:100]}...'")
+            logger.error(f"Message ID: {message_id} - Failed to parse intent response JSON: {e}")
+            logger.warning(f"Message ID: {message_id} - Raw response was: '{response[:100]}...'")
             return {"waiting": 1}
     
-    def _parse_service_response(self, response: str) -> Dict[str, Any]:
+    def _parse_service_response(self, response: str, message_id: str) -> Dict[str, Any]:
         """Parse service identification response"""
         try:
+            logger.debug(f"Message ID: {message_id} - Parsing service response: {response[:200]}...")
             # Handle "json{...}" prefix that Claude sometimes adds
             clean_response = response.strip()
             if clean_response.startswith("json"):
                 clean_response = clean_response[4:].strip()
             
             result = json.loads(clean_response)
-            return {
+            parsed_result = {
                 "time_fraction": result.get("time_fractions", result.get("time_fraction", 1)),
                 "service_name": result.get("service_name", "unknown")
             }
+            logger.debug(f"Message ID: {message_id} - Service response parsed successfully: {parsed_result}")
+            return parsed_result
         except Exception as e:
-            logger.error(f"Failed to parse service response JSON: {e}")
-            logger.warning(f"Raw response was: '{response[:100]}...'")
+            logger.error(f"Message ID: {message_id} - Failed to parse service response JSON: {e}")
+            logger.warning(f"Message ID: {message_id} - Raw response was: '{response[:100]}...'")
             return {"time_fraction": 1, "service_name": "unknown"}
     
-    def _parse_main_response(self, response: str) -> Dict[str, Any]:
+    def _parse_main_response(self, response: str, message_id: str) -> Dict[str, Any]:
         """Parse main response"""
         try:
+            logger.debug(f"Message ID: {message_id} - Parsing main response: {response[:200]}...")
             # Handle "json{...}" prefix and clean control characters
             import re
             clean_response = response.strip()
@@ -369,7 +388,7 @@ class ClaudeService:
             clean_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', clean_response)
             
             result = json.loads(clean_response)
-            return {
+            parsed_result = {
                 "gpt_response": result.get("client_response", result.get("gpt_response", "")),
                 "pic": result.get("pic"),
                 "activate_booking": result.get("activate_booking"),
@@ -385,9 +404,11 @@ class ClaudeService:
                 "name": result.get("name"),
                 "feedback": result.get("feedback")
             }
+            logger.debug(f"Message ID: {message_id} - Main response parsed successfully: {parsed_result}")
+            return parsed_result
         except Exception as e:
-            logger.error(f"Failed to parse main response JSON: {e}")
-            logger.warning(f"Raw response was: '{response[:200]}...'")
+            logger.error(f"Message ID: {message_id} - Failed to parse main response JSON: {e}")
+            logger.warning(f"Message ID: {message_id} - Raw response was: '{response[:200]}...'")
             return {
                 "gpt_response": "Извините, произошла ошибка. Попробуйте еще раз.",
             } 

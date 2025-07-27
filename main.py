@@ -9,6 +9,8 @@ import asyncio
 import json
 import logging
 import sys
+import random
+import string
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,6 +22,12 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def generate_message_id() -> str:
+    """Generate a unique 10-character alphanumeric message ID"""
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+
 
 from app.database import get_db, create_tables, SessionLocal
 from app.config import settings, ProjectConfig
@@ -189,9 +197,14 @@ async def sendpulse_webhook(
     Main webhook endpoint for SendPulse messages
     Processes incoming messages according to the technical specification
     """
+    # Generate unique message ID for tracking
+    message_id = generate_message_id()
     client_id = message.tg_id
-    logger.info(f"Webhook received: project_id={message.project_id}, client_id={client_id}, count={message.count}, retry={message.retry}")
-    logger.debug(f"Message content: '{message.response[:200]}...'")
+    
+    # Log message receipt with unique ID
+    logger.info(f"Message {message.response} get UUID: {message_id}")
+    logger.info(f"Message ID: {message_id} - Webhook received: project_id={message.project_id}, client_id={client_id}, count={message.count}, retry={message.retry}")
+    logger.debug(f"Message ID: {message_id} - Message content: '{message.response[:200]}...'")
     
     error_count = 0
     
@@ -200,7 +213,7 @@ async def sendpulse_webhook(
         project_config = project_configs.get(message.project_id, project_configs.get("default"))
         if not project_config:
             error_count += 1
-            logger.error(f"Project configuration not found for project_id={message.project_id}")
+            logger.error(f"Message ID: {message_id} - Project configuration not found for project_id={message.project_id}")
             return WebhookResponse(
                 send_status="FALSE",
                 count=f"{error_count}",
@@ -213,7 +226,7 @@ async def sendpulse_webhook(
         from app.database import Project
         existing_project = db.query(Project).filter(Project.project_id == message.project_id).first()
         if not existing_project:
-            logger.info(f"Creating new project in database: {message.project_id}")
+            logger.info(f"Message ID: {message_id} - Creating new project in database: {message.project_id}")
             db_project = Project(
                 project_id=message.project_id,
                 name=f"Project {message.project_id}",
@@ -222,19 +235,19 @@ async def sendpulse_webhook(
             )
             db.add(db_project)
             db.commit()
-            logger.info(f"Created project {message.project_id} in database")
+            logger.info(f"Message ID: {message_id} - Created project {message.project_id} in database")
         
         # Initialize services
-        logger.debug(f"Initializing queue service for webhook request from client_id={client_id}")
+        logger.debug(f"Message ID: {message_id} - Initializing queue service for webhook request from client_id={client_id}")
         queue_service = MessageQueueService(db)
         
         # Process incoming message
-        logger.debug(f"Processing incoming message through queue service for client_id={client_id}")
-        queue_result = queue_service.process_incoming_message(message)
+        logger.info(f"Message ID: {message_id} - Processing incoming message {message.response[:100]} through queue service for client_id={client_id}")
+        queue_result = queue_service.process_incoming_message(message, message_id)
         
         if "error" in queue_result:
             error_count += 1
-            logger.error(f"Queue processing error for client_id={client_id}: {queue_result['error']}")
+            logger.error(f"Message ID: {message_id} - Queue processing error for client_id={client_id}: {queue_result['error']}")
             return WebhookResponse(
                 send_status="FALSE",
                 count=f"{error_count}",
@@ -245,7 +258,7 @@ async def sendpulse_webhook(
         
         # Check if this message should be skipped due to retry logic
         if queue_result.get("send_status") == "FALSE":
-            logger.info(f"Message skipped due to retry logic for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Message skipped due to retry logic for client_id={client_id}")
             return WebhookResponse(
                 send_status="FALSE",
                 count="1",
@@ -255,16 +268,17 @@ async def sendpulse_webhook(
             )
         
         # Process the message directly and wait for response
-        logger.info(f"Processing message directly for client_id={client_id}")
+        logger.info(f"Message ID: {message_id} - Processing message directly for client_id={client_id}")
         response_data = await process_message_async(
             message.project_id,
             client_id,
-            queue_result["queue_item_id"]
+            queue_result["queue_item_id"],
+            message_id
         )
         
         if not response_data:
             error_count += 1
-            logger.error(f"No response received from processing for client_id={client_id}")
+            logger.error(f"Message ID: {message_id} - No response received from processing for client_id={client_id}")
             return WebhookResponse(
                 send_status="FALSE",
                 count=f"{error_count}",
@@ -276,7 +290,7 @@ async def sendpulse_webhook(
         # Check for processing errors in response_data
         if response_data.get("error"):
             error_count += response_data.get("error_count", 1)
-            logger.error(f"Processing errors occurred for client_id={client_id}: {response_data['error']}")
+            logger.error(f"Message ID: {message_id} - Processing errors occurred for client_id={client_id}: {response_data['error']}")
             return WebhookResponse(
                 send_status="FALSE",
                 count=f"{error_count}",
@@ -287,11 +301,11 @@ async def sendpulse_webhook(
         
         # CRITICAL: Check if this message was superseded during processing
         queue_service = MessageQueueService(db)
-        message_was_superseded = queue_service.check_if_message_superseded(queue_result["queue_item_id"])
+        message_was_superseded = queue_service.check_if_message_superseded(queue_result["queue_item_id"], message_id)
         
         if message_was_superseded:
             # This message was superseded by a newer message during processing
-            logger.info(f"Message {queue_result['queue_item_id']} was superseded during processing for client_id={client_id}, returning send_status=FALSE")
+            logger.info(f"Message ID: {message_id} - Message {queue_result['queue_item_id']} was superseded during processing for client_id={client_id}, returning send_status=FALSE")
             return WebhookResponse(
                 send_status="FALSE",
                 count=None,  # No errors, just superseded by newer message
@@ -301,19 +315,19 @@ async def sendpulse_webhook(
             )
         
         # Check if there are new messages in queue after processing
-        has_new_messages = queue_service.has_pending_messages(message.project_id, client_id)
+        has_new_messages = queue_service.has_pending_messages(message.project_id, client_id, message_id)
         
         # Determine send_status and count based on errors and new messages
         if has_new_messages:
             # No errors but new messages arrived during processing
             send_status = "FALSE"
             count = None  # No errors, just new messages
-            logger.info(f"New messages found in queue for client_id={client_id}, returning send_status=FALSE, count=None")
+            logger.info(f"Message ID: {message_id} - New messages found in queue for client_id={client_id}, returning send_status=FALSE, count=None")
         else:
             # No errors and no new messages - successful completion
             send_status = "TRUE"
             count = "0"  # Successful completion, no errors
-            logger.info(f"No new messages in queue for client_id={client_id}, returning send_status=TRUE, count=0")
+            logger.info(f"Message ID: {message_id} - No new messages in queue for client_id={client_id}, returning send_status=TRUE, count=0")
         
         # Return the final response
         return WebhookResponse(
@@ -326,7 +340,7 @@ async def sendpulse_webhook(
         
     except Exception as e:
         error_count += 1
-        logger.error(f"Webhook error: {e}", exc_info=True)
+        logger.error(f"Message ID: {message_id} - Webhook error: {e}", exc_info=True)
         return WebhookResponse(
             send_status="FALSE",
             count=f"{error_count}",
@@ -336,12 +350,12 @@ async def sendpulse_webhook(
         )
 
 
-async def process_message_async(project_id: str, client_id: str, queue_item_id: str) -> dict:
+async def process_message_async(project_id: str, client_id: str, queue_item_id: str, message_id: str) -> dict:
     """
     Process message with AI and return response data
     This implements the full processing pipeline from the technical specification
     """
-    logger.info(f"Starting message processing for project_id={project_id}, client_id={client_id}, queue_item_id={queue_item_id}")
+    logger.info(f"Message ID: {message_id} - Starting message processing for project_id={project_id}, client_id={client_id}, queue_item_id={queue_item_id}")
     
     error_count = 0
     
@@ -355,7 +369,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             project_config = project_configs.get(project_id, project_configs.get("default"))
             if not project_config:
                 error_count += 1
-                logger.error(f"Project configuration not found for project_id={project_id}")
+                logger.error(f"Message ID: {message_id} - Project configuration not found for project_id={project_id}")
                 return {
                     "error": "Project configuration not found",
                     "error_count": error_count,
@@ -364,18 +378,18 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 }
             
             # Initialize services
-            logger.debug(f"Initializing services for client_id={client_id}")
+            logger.debug(f"Message ID: {message_id} - Initializing services for client_id={client_id}")
             queue_service = MessageQueueService(db)
             claude_service = ClaudeService(db)
             sheets_service = GoogleSheetsService(project_config)
             booking_service = BookingService(db, project_config)
             
             # Get message from queue
-            logger.debug(f"Getting message from queue for client_id={client_id}")
-            message_item = queue_service.get_message_for_processing(project_id, client_id)
+            logger.debug(f"Message ID: {message_id} - Getting message from queue for client_id={client_id}")
+            message_item = queue_service.get_message_for_processing(project_id, client_id, message_id)
             if not message_item:
                 error_count += 1
-                logger.warning(f"No message found in queue for client_id={client_id}")
+                logger.warning(f"Message ID: {message_id} - No message found in queue for client_id={client_id}")
                 return {
                     "error": "No message found in queue",
                     "error_count": error_count,
@@ -383,28 +397,29 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     "pic": ""
                 }
             
-            logger.info(f"Processing message: '{message_item.aggregated_message[:100]}...' for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Processing message: '{message_item.aggregated_message[:100]}...' for client_id={client_id}")
             
             # Update message status to processing
-            logger.debug(f"Updating message status to processing for message_id={message_item.id}")
-            queue_service.update_message_status(message_item.id, MessageStatus.PROCESSING)
+            logger.debug(f"Message ID: {message_id} - Updating message status to processing for message_id={message_item.id}")
+            queue_service.update_message_status(message_item.id, MessageStatus.PROCESSING, message_id)
             
             # Get dialogue history
-            logger.debug(f"Getting dialogue history for client_id={client_id}")
-            dialogue_history = get_dialogue_history(db, project_id, client_id)
+            logger.debug(f"Message ID: {message_id} - Getting dialogue history for client_id={client_id}")
+            dialogue_history = get_dialogue_history(db, project_id, client_id, message_id)
             
             # Step 1: Intent detection (async)
-            logger.info(f"Starting intent detection for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Starting intent detection for client_id={client_id}")
             try:
                 intent_result = await claude_service.detect_intent(
                     project_config,
                     dialogue_history,
-                    message_item.aggregated_message
+                    message_item.aggregated_message,
+                    message_id
                 )
-                logger.debug(f"Intent detection result for client_id={client_id}: waiting={intent_result.waiting}, date_order={intent_result.date_order}")
+                logger.debug(f"Message ID: {message_id} - Intent detection result for client_id={client_id}: waiting={intent_result.waiting}, date_order={intent_result.date_order}")
             except Exception as e:
                 error_count += 1
-                logger.error(f"Error in intent detection for client_id={client_id}: {e}")
+                logger.error(f"Message ID: {message_id} - Error in intent detection for client_id={client_id}: {e}")
                 # Continue with default intent
                 from app.models import IntentDetectionResult
                 intent_result = IntentDetectionResult(waiting=1)
@@ -417,7 +432,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             
             if not intent_result.waiting:
                 # Client is not just chatting - need service info and slots
-                logger.info(f"Running parallel service identification and slot fetching for client_id={client_id}")
+                logger.info(f"Message ID: {message_id} - Running parallel service identification and slot fetching for client_id={client_id}")
                 
                 # Prepare tasks that can run in parallel
                 tasks = []
@@ -426,20 +441,21 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 service_task = claude_service.identify_service(
                     project_config,
                     dialogue_history,
-                    message_item.aggregated_message
+                    message_item.aggregated_message,
+                    message_id
                 )
                 tasks.append(service_task)
                 
                 # Task 2: Get slots based on intent (if we have date/time info)
                 slot_task = None
                 if intent_result.date_order:
-                    logger.debug(f"Preparing slot fetch for specific date {intent_result.date_order}")
+                    logger.debug(f"Message ID: {message_id} - Preparing slot fetch for specific date {intent_result.date_order}")
                     target_date = parse_date(intent_result.date_order)
                     if target_date:
                         # Use default time_fraction initially, will adjust after service identification
                         slot_task = sheets_service.get_available_slots_async(db, target_date, 1)
                 elif intent_result.desire_time0 and intent_result.desire_time1:
-                    logger.debug(f"Preparing slot fetch for time range {intent_result.desire_time0}-{intent_result.desire_time1}")
+                    logger.debug(f"Message ID: {message_id} - Preparing slot fetch for time range {intent_result.desire_time0}-{intent_result.desire_time1}")
                     start_time = parse_time(intent_result.desire_time0)
                     end_time = parse_time(intent_result.desire_time1)
                     if start_time and end_time:
@@ -456,14 +472,14 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 
                 try:
                     # Run tasks in parallel
-                    logger.debug(f"Running {len(tasks)} tasks in parallel for client_id={client_id}")
+                    logger.debug(f"Message ID: {message_id} - Running {len(tasks)} tasks in parallel for client_id={client_id}")
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     
                     # Process results
                     service_result = results[0] if not isinstance(results[0], Exception) else None
                     if isinstance(results[0], Exception):
                         error_count += 1
-                        logger.error(f"Error in parallel service identification for client_id={client_id}: {results[0]}")
+                        logger.error(f"Message ID: {message_id} - Error in parallel service identification for client_id={client_id}: {results[0]}")
                         from app.models import ServiceIdentificationResult
                         service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
                     
@@ -471,10 +487,10 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                         slots = results[1] if not isinstance(results[1], Exception) else None
                         if isinstance(results[1], Exception):
                             error_count += 1
-                            logger.error(f"Error in parallel slot fetching for client_id={client_id}: {results[1]}")
+                            logger.error(f"Message ID: {message_id} - Error in parallel slot fetching for client_id={client_id}: {results[1]}")
                         elif slots:
                             available_slots = slots.slots_by_specialist
-                            logger.debug(f"Found available slots in parallel: {len(available_slots)} specialists")
+                            logger.debug(f"Message ID: {message_id} - Found available slots in parallel: {len(available_slots)} specialists")
                     
                     # Get client bookings result
                     client_bookings_idx = 2 if slot_task else 1
@@ -482,16 +498,16 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                         client_bookings = results[client_bookings_idx] if not isinstance(results[client_bookings_idx], Exception) else ""
                         if isinstance(results[client_bookings_idx], Exception):
                             error_count += 1
-                            logger.error(f"Error getting client bookings for client_id={client_id}: {results[client_bookings_idx]}")
+                            logger.error(f"Message ID: {message_id} - Error getting client bookings for client_id={client_id}: {results[client_bookings_idx]}")
                             client_bookings = ""
                     else:
                         client_bookings = ""
                     
-                    logger.info(f"Parallel processing completed for client_id={client_id}")
+                    logger.info(f"Message ID: {message_id} - Parallel processing completed for client_id={client_id}")
                     
                 except Exception as e:
                     error_count += 1
-                    logger.error(f"Error in parallel processing for client_id={client_id}: {e}")
+                    logger.error(f"Message ID: {message_id} - Error in parallel processing for client_id={client_id}: {e}")
                     # Fallback to default values
                     from app.models import ServiceIdentificationResult
                     service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
@@ -499,7 +515,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 
                 # If we need to refetch slots with correct time_fraction after service identification
                 if service_result and service_result.time_fraction != 1 and available_slots:
-                    logger.debug(f"Refetching slots with correct time_fraction={service_result.time_fraction} for client_id={client_id}")
+                    logger.debug(f"Message ID: {message_id} - Refetching slots with correct time_fraction={service_result.time_fraction} for client_id={client_id}")
                     try:
                         if intent_result.date_order:
                             target_date = parse_date(intent_result.date_order)
@@ -516,20 +532,20 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                                 available_slots = slots.slots_by_specialist
                     except Exception as e:
                         error_count += 1
-                        logger.error(f"Error refetching slots with correct time_fraction for client_id={client_id}: {e}")
+                        logger.error(f"Message ID: {message_id} - Error refetching slots with correct time_fraction for client_id={client_id}: {e}")
                 
             else:
                 # Client is just chatting/waiting - only need basic info
-                logger.debug(f"Client is waiting/chatting for client_id={client_id}, skipping service identification and slot fetching")
+                logger.debug(f"Message ID: {message_id} - Client is waiting/chatting for client_id={client_id}, skipping service identification and slot fetching")
                 try:
                     client_bookings = await asyncio.to_thread(booking_service.get_client_bookings_as_string, client_id)
                 except Exception as e:
                     error_count += 1
-                    logger.error(f"Error getting client bookings for client_id={client_id}: {e}")
+                    logger.error(f"Message ID: {message_id} - Error getting client bookings for client_id={client_id}: {e}")
                     client_bookings = ""
             
             # Step 3: Generate main response (async)
-            logger.info(f"Generating main response for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Generating main response for client_id={client_id}")
             try:
                 main_response = await claude_service.generate_main_response(
                     project_config,
@@ -538,14 +554,15 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     current_date.strftime("%d.%m.%Y"),
                     available_slots,
                     reserved_slots,
-                    client_bookings
+                    client_bookings,
+                    message_id
                 )
-                logger.debug(f"Main response generated for client_id={client_id}: activate_booking={main_response.activate_booking}, reject_order={main_response.reject_order}, change_order={main_response.change_order}")
+                logger.debug(f"Message ID: {message_id} - Main response generated for client_id={client_id}: activate_booking={main_response.activate_booking}, reject_order={main_response.reject_order}, change_order={main_response.change_order}")
             except Exception as e:
                 error_count += 1
-                logger.error(f"Error generating main response for client_id={client_id}: {e}")
+                logger.error(f"Message ID: {message_id} - Error generating main response for client_id={client_id}: {e}")
                 # Return error response
-                queue_service.update_message_status(message_item.id, MessageStatus.CANCELLED)
+                queue_service.update_message_status(message_item.id, MessageStatus.CANCELLED, message_id)
                 return {
                     "error": "Error generating AI response",
                     "error_count": error_count,
@@ -556,34 +573,34 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             # Process booking actions (async)
             booking_result = {"success": False, "message": ""}
             if any([main_response.activate_booking, main_response.reject_order, main_response.change_order]):
-                logger.info(f"Processing booking action for client_id={client_id}")
+                logger.info(f"Message ID: {message_id} - Processing booking action for client_id={client_id}")
                 try:
-                    booking_result = await booking_service.process_booking_action(main_response, client_id)
-                    logger.info(f"Booking action result for client_id={client_id}: success={booking_result['success']}, message={booking_result['message']}")
+                    booking_result = await booking_service.process_booking_action(main_response, client_id, message_id)
+                    logger.info(f"Message ID: {message_id} - Booking action result for client_id={client_id}: success={booking_result['success']}, message={booking_result['message']}")
                 except Exception as e:
                     error_count += 1
-                    logger.error(f"Error processing booking action for client_id={client_id}: {e}")
+                    logger.error(f"Message ID: {message_id} - Error processing booking action for client_id={client_id}: {e}")
                     booking_result = {"success": False, "message": "Ошибка при обработке бронирования"}
             else:
-                logger.debug(f"No booking action required for client_id={client_id}")
+                logger.debug(f"Message ID: {message_id} - No booking action required for client_id={client_id}")
             
             # Save dialogue entry
-            logger.debug(f"Saving dialogue entries for client_id={client_id}")
+            logger.debug(f"Message ID: {message_id} - Saving dialogue entries for client_id={client_id}")
             try:
-                save_dialogue_entry(db, project_id, client_id, message_item.original_message, "client")
-                save_dialogue_entry(db, project_id, client_id, main_response.gpt_response, "claude")
+                save_dialogue_entry(db, project_id, client_id, message_item.original_message, "client", message_id)
+                save_dialogue_entry(db, project_id, client_id, main_response.gpt_response, "claude", message_id)
             except Exception as e:
                 error_count += 1
-                logger.error(f"Error saving dialogue entries for client_id={client_id}: {e}")
+                logger.error(f"Message ID: {message_id} - Error saving dialogue entries for client_id={client_id}: {e}")
                 # Continue anyway
             
             # Mark current message as completed (only if not superseded)
-            current_status = queue_service.check_if_message_superseded(message_item.id)
+            current_status = queue_service.check_if_message_superseded(message_item.id, message_id)
             if not current_status:
-                logger.debug(f"Updating message status to completed for message_id={message_item.id}")
-                queue_service.update_message_status(message_item.id, MessageStatus.COMPLETED)
+                logger.debug(f"Message ID: {message_id} - Updating message status to completed for message_id={message_item.id}")
+                queue_service.update_message_status(message_item.id, MessageStatus.COMPLETED, message_id)
             else:
-                logger.debug(f"Message {message_item.id} was superseded, preserving superseded status")
+                logger.debug(f"Message ID: {message_id} - Message {message_item.id} was superseded, preserving superseded status")
             
             # Prepare final response
             final_response = main_response.gpt_response
@@ -592,7 +609,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             elif booking_result["message"]:
                 final_response += f"\n\nОшибка: {booking_result['message']}"
             
-            logger.info(f"Message processing completed for client_id={client_id} with {error_count} errors")
+            logger.info(f"Message ID: {message_id} - Message processing completed for client_id={client_id} with {error_count} errors")
             
             # Return response data for webhook
             if error_count > 0:
@@ -610,22 +627,22 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             
         finally:
             db.close()
-            logger.debug(f"Database session closed for client_id={client_id}")
+            logger.debug(f"Message ID: {message_id} - Database session closed for client_id={client_id}")
             
     except Exception as e:
         error_count += 1
-        logger.error(f"Error processing message for client_id={client_id}: {e}", exc_info=True)
+        logger.error(f"Message ID: {message_id} - Error processing message for client_id={client_id}: {e}", exc_info=True)
         # Update message status to failed
         try:
             from app.database import SessionLocal
             db = SessionLocal()
             queue_service = MessageQueueService(db)
-            logger.debug(f"Marking message as cancelled due to error for queue_item_id={queue_item_id}")
-            queue_service.update_message_status(queue_item_id, MessageStatus.CANCELLED)
+            logger.debug(f"Message ID: {message_id} - Marking message as cancelled due to error for queue_item_id={queue_item_id}")
+            queue_service.update_message_status(queue_item_id, MessageStatus.CANCELLED, message_id)
             db.close()
         except Exception as cleanup_error:
             error_count += 1
-            logger.error(f"Failed to update message status during error cleanup: {cleanup_error}")
+            logger.error(f"Message ID: {message_id} - Failed to update message status during error cleanup: {cleanup_error}")
         
         return {
             "error": f"Critical error during processing: {str(e)}",
@@ -635,12 +652,12 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
         }
 
 
-def get_dialogue_history(db: Session, project_id: str, client_id: str) -> str:
+def get_dialogue_history(db: Session, project_id: str, client_id: str, message_id: str) -> str:
     """Get dialogue history for a client"""
     from app.database import Dialogue
     from sqlalchemy import desc
     
-    logger.debug(f"Getting dialogue history for client_id={client_id}, project_id={project_id}")
+    logger.debug(f"Message ID: {message_id} - Getting dialogue history for client_id={client_id}, project_id={project_id}")
     
     dialogues = db.query(Dialogue).filter(
         and_(
@@ -650,7 +667,7 @@ def get_dialogue_history(db: Session, project_id: str, client_id: str) -> str:
         )
     ).order_by(desc(Dialogue.timestamp)).limit(50).all()
     
-    logger.debug(f"Found {len(dialogues)} dialogue entries for client_id={client_id}")
+    logger.debug(f"Message ID: {message_id} - Found {len(dialogues)} dialogue entries for client_id={client_id}")
     
     history_lines = []
     for dialogue in reversed(dialogues):
@@ -658,16 +675,16 @@ def get_dialogue_history(db: Session, project_id: str, client_id: str) -> str:
         history_lines.append(f"{role}: {dialogue.message}")
     
     history_text = "\n".join(history_lines)
-    logger.debug(f"Built dialogue history for client_id={client_id}: {len(history_text)} characters")
+    logger.debug(f"Message ID: {message_id} - Built dialogue history for client_id={client_id}: {len(history_text)} characters")
     
     return history_text
 
 
-def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: str, role: str):
+def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: str, role: str, message_id: str):
     """Save a dialogue entry"""
     from app.database import Dialogue
     
-    logger.debug(f"Saving dialogue entry: client_id={client_id}, role={role}, message_length={len(message)}")
+    logger.debug(f"Message ID: {message_id} - Saving dialogue entry: client_id={client_id}, role={role}, message_length={len(message)}")
     
     dialogue = Dialogue(
         project_id=project_id,
@@ -680,7 +697,7 @@ def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: s
     db.add(dialogue)
     db.commit()
     
-    logger.debug(f"Dialogue entry saved successfully for client_id={client_id}, role={role}")
+    logger.debug(f"Message ID: {message_id} - Dialogue entry saved successfully for client_id={client_id}, role={role}")
 
 
 def parse_date(date_str: str) -> Optional[date]:

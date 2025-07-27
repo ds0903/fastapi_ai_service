@@ -25,7 +25,7 @@ class MessageQueueService:
         self.redis_client = redis_client
         logger.debug("MessageQueueService initialized")
     
-    def process_incoming_message(self, message: SendPulseMessage) -> Dict[str, Any]:
+    def process_incoming_message(self, message: SendPulseMessage, message_id: str) -> Dict[str, Any]:
         """
         Process incoming message from SendPulse according to the technical specification:
         1. Check if message should be processed (retry logic)
@@ -35,15 +35,15 @@ class MessageQueueService:
         """
         client_id = message.tg_id
         if not client_id:
-            logger.error(f"No client ID provided in message: {message}")
+            logger.error(f"Message ID: {message_id} - No client ID provided in message: {message}")
             return {"error": "No client ID provided"}
         
-        logger.info(f"Processing incoming message from client_id={client_id}, project_id={message.project_id}")
-        logger.debug(f"Message details: count={message.count}, retry={message.retry}, message='{message.response[:100]}...'")
+        logger.info(f"Message ID: {message_id} - Processing incoming message {message.response[:100]} from client_id={client_id}, project_id={message.project_id}")
+        logger.info(f"Message ID: {message_id} - Message details: count={message.count}, retry={message.retry}, message='{message.response[:100]}...'")
         
         # Step 3: Check retry logic
-        if not self._should_process_message(message):
-            logger.info(f"Message skipped due to retry logic for client_id={client_id}")
+        if not self._should_process_message(message, message_id):
+            logger.info(f"Message ID: {message_id} - Message skipped due to retry logic for client_id={client_id}")
             return {
                 "send_status": "FALSE",
                 "count": "1",
@@ -51,10 +51,10 @@ class MessageQueueService:
             }
         
         # Step 2: Check for existing messages and coordinate responses
-        coordination_result = self._coordinate_client_messages(message)
+        coordination_result = self._coordinate_client_messages(message, message_id)
         
         if coordination_result.get("should_return_false"):
-            logger.info(f"Message should return FALSE due to newer messages for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Message should return FALSE due to newer messages for client_id={client_id}")
             return {
                 "send_status": "FALSE", 
                 "queue_item_id": coordination_result["queue_item_id"],
@@ -62,21 +62,21 @@ class MessageQueueService:
             }
         
         # Step 4: Add to queue and handle aggregation
-        logger.debug(f"Adding message to queue for client_id={client_id}")
+        logger.debug(f"Message ID: {message_id} - Adding message to queue for client_id={client_id}")
         queue_item = coordination_result["queue_item"]
         
         # Update client last activity
-        logger.debug(f"Updating client activity for client_id={client_id}")
-        self._update_client_activity(message.project_id, client_id)
+        logger.debug(f"Message ID: {message_id} - Updating client activity for client_id={client_id}")
+        self._update_client_activity(message.project_id, client_id, message_id)
         
-        logger.info(f"Message queued successfully for client_id={client_id}, queue_item_id={queue_item.id}")
+        logger.info(f"Message ID: {message_id} - Message queued successfully for client_id={client_id}, queue_item_id={queue_item.id}")
         return {
             "queue_item_id": queue_item.id,
             "status": "queued",
             "aggregated_message": queue_item.aggregated_message
         }
     
-    def _should_process_message(self, message: SendPulseMessage) -> bool:
+    def _should_process_message(self, message: SendPulseMessage, message_id: str) -> bool:
         """
         Determine if message should be processed based on retry logic
         From spec: if (retry = false) or (retry = true and count != 0) - process
@@ -86,12 +86,12 @@ class MessageQueueService:
         
         if not message.retry:
             should_process = True
-            logger.debug(f"Processing message for client_id={client_id}: not a retry")
+            logger.debug(f"Message ID: {message_id} - Processing message for client_id={client_id}: not a retry")
         elif message.retry and message.count != 0:
             should_process = True
-            logger.debug(f"Processing message for client_id={client_id}: retry with count={message.count}")
+            logger.debug(f"Message ID: {message_id} - Processing message for client_id={client_id}: retry with count={message.count}")
         else:
-            logger.debug(f"Skipping message for client_id={client_id}: retry with count=0")
+            logger.debug(f"Message ID: {message_id} - Skipping message for client_id={client_id}: retry with count=0")
         
         return should_process
     
@@ -178,7 +178,7 @@ class MessageQueueService:
         logger.debug(f"Client {client_id} processing status: {is_processing}")
         return is_processing
 
-    def _coordinate_client_messages(self, message: SendPulseMessage) -> Dict[str, Any]:
+    def _coordinate_client_messages(self, message: SendPulseMessage, message_id: str) -> Dict[str, Any]:
         """
         Coordinate messages for a client to ensure proper send_status behavior:
         - Mark previous pending/processing messages to return FALSE
@@ -196,11 +196,11 @@ class MessageQueueService:
             )
         ).all()
         
-        logger.debug(f"Found {len(existing_messages)} existing messages for client_id={client_id}")
+        logger.debug(f"Message ID: {message_id} - Found {len(existing_messages)} existing messages for client_id={client_id}")
         
         # If there are existing messages, mark them to return FALSE
         if existing_messages:
-            logger.info(f"Marking {len(existing_messages)} existing messages to return FALSE for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Marking {len(existing_messages)} existing messages to return FALSE for client_id={client_id}")
             
             # Collect all message text for aggregation
             all_messages = []
@@ -209,20 +209,20 @@ class MessageQueueService:
                 # Mark existing messages as superseded (they should return FALSE)
                 msg.status = MessageStatus.SUPERSEDED  # We'll add this status
                 msg.updated_at = datetime.utcnow()
-                logger.debug(f"Marked message {msg.id} as superseded for client_id={client_id}")
+                logger.debug(f"Message ID: {message_id} - Marked message {msg.id} as superseded for client_id={client_id}")
             
             # Add current message to aggregation
             all_messages.append(message.response)
             aggregated_text = " ".join(all_messages)
             
-            logger.info(f"Aggregating {len(all_messages)} messages for client_id={client_id}: '{aggregated_text[:100]}...'")
+            logger.info(f"Message ID: {message_id} - Aggregating {len(all_messages)} messages for client_id={client_id}: '{aggregated_text[:100]}...'")
         else:
-            logger.debug(f"No existing messages for client_id={client_id}, processing normally")
+            logger.debug(f"Message ID: {message_id} - No existing messages for client_id={client_id}, processing normally")
             aggregated_text = message.response
         
         # Create new queue item for current message
         queue_item_id = str(uuid.uuid4())
-        logger.debug(f"Creating new queue item {queue_item_id} for client_id={client_id}")
+        logger.debug(f"Message ID: {message_id} - Creating new queue item {queue_item_id} for client_id={client_id}")
         queue_item = MessageQueue(
             id=queue_item_id,
             project_id=message.project_id,
@@ -238,7 +238,7 @@ class MessageQueueService:
         self.db.commit()
         self.db.refresh(queue_item)
         
-        logger.info(f"Queue item {queue_item_id} created successfully for client_id={client_id}")
+        logger.info(f"Message ID: {message_id} - Queue item {queue_item_id} created successfully for client_id={client_id}")
         
         return {
             "queue_item": queue_item,
@@ -246,9 +246,12 @@ class MessageQueueService:
             "should_return_false": False  # Current message should be processed
         }
     
-    def get_message_for_processing(self, project_id: str, client_id: str) -> Optional[MessageQueueItem]:
+    def get_message_for_processing(self, project_id: str, client_id: str, message_id: str = None) -> Optional[MessageQueueItem]:
         """Get the latest pending message for a client"""
-        logger.debug(f"Getting message for processing: project_id={project_id}, client_id={client_id}")
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Getting message for processing: project_id={project_id}, client_id={client_id}")
+        else:
+            logger.debug(f"Getting message for processing: project_id={project_id}, client_id={client_id}")
         
         message = self.db.query(MessageQueue).filter(
             and_(
@@ -259,7 +262,10 @@ class MessageQueueService:
         ).order_by(desc(MessageQueue.created_at)).first()
         
         if message:
-            logger.debug(f"Found pending message {message.id} for client_id={client_id}")
+            if message_id:
+                logger.debug(f"Message ID: {message_id} - Found pending message {message.id} for client_id={client_id}")
+            else:
+                logger.debug(f"Found pending message {message.id} for client_id={client_id}")
             return MessageQueueItem(
                 id=message.id,
                 project_id=message.project_id,
@@ -272,23 +278,35 @@ class MessageQueueService:
                 retry_count=message.retry_count
             )
         else:
-            logger.debug(f"No pending message found for client_id={client_id}")
+            if message_id:
+                logger.debug(f"Message ID: {message_id} - No pending message found for client_id={client_id}")
+            else:
+                logger.debug(f"No pending message found for client_id={client_id}")
             return None
     
-    def update_message_status(self, message_id: str, status: MessageStatus) -> bool:
+    def update_message_status(self, queue_item_id: str, status: MessageStatus, message_id: str = None) -> bool:
         """Update message status"""
-        logger.debug(f"Updating message status: message_id={message_id}, status={status.value}")
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Updating message status: queue_item_id={queue_item_id}, status={status.value}")
+        else:
+            logger.debug(f"Updating message status: queue_item_id={queue_item_id}, status={status.value}")
         
-        message = self.db.query(MessageQueue).filter(MessageQueue.id == message_id).first()
+        message = self.db.query(MessageQueue).filter(MessageQueue.id == queue_item_id).first()
         if message:
             old_status = message.status
             message.status = status.value
             message.updated_at = datetime.utcnow()
             self.db.commit()
-            logger.info(f"Message status updated: message_id={message_id}, {old_status} -> {status.value}")
+            if message_id:
+                logger.info(f"Message ID: {message_id} - Message status updated: queue_item_id={queue_item_id}, {old_status} -> {status.value}")
+            else:
+                logger.info(f"Message status updated: queue_item_id={queue_item_id}, {old_status} -> {status.value}")
             return True
         else:
-            logger.warning(f"Message not found for status update: message_id={message_id}")
+            if message_id:
+                logger.warning(f"Message ID: {message_id} - Message not found for status update: queue_item_id={queue_item_id}")
+            else:
+                logger.warning(f"Message not found for status update: queue_item_id={queue_item_id}")
             return False
     
     def check_message_still_valid(self, message_id: str) -> bool:
@@ -341,8 +359,9 @@ class MessageQueueService:
         
         logger.info(f"Client queue cleared successfully for client_id={client_id}")
     
-    def _update_client_activity(self, project_id: str, client_id: str) -> None:
+    def _update_client_activity(self, project_id: str, client_id: str, message_id: str) -> None:
         """Update client last activity timestamp"""
+        logger.debug(f"Message ID: {message_id} - Updating client activity for project_id={project_id}, client_id={client_id}")
         activity = self.db.query(ClientLastActivity).filter(
             and_(
                 ClientLastActivity.project_id == project_id,
@@ -352,6 +371,7 @@ class MessageQueueService:
         
         if activity:
             activity.last_message_at = datetime.utcnow()
+            logger.debug(f"Message ID: {message_id} - Updated existing activity record for client_id={client_id}")
         else:
             activity = ClientLastActivity(
                 project_id=project_id,
@@ -359,6 +379,7 @@ class MessageQueueService:
                 last_message_at=datetime.utcnow()
             )
             self.db.add(activity)
+            logger.debug(f"Message ID: {message_id} - Created new activity record for client_id={client_id}")
         
         self.db.commit()
     
@@ -379,12 +400,15 @@ class MessageQueueService:
             for activity in activities
         ]
     
-    def has_pending_messages(self, project_id: str, client_id: str) -> bool:
+    def has_pending_messages(self, project_id: str, client_id: str, message_id: str = None) -> bool:
         """
         Check if client has any pending messages in queue
         Used to determine correct send_status and count values
         """
-        logger.debug(f"Checking for pending messages: project_id={project_id}, client_id={client_id}")
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Checking for pending messages: project_id={project_id}, client_id={client_id}")
+        else:
+            logger.debug(f"Checking for pending messages: project_id={project_id}, client_id={client_id}")
         
         pending_count = self.db.query(MessageQueue).filter(
             and_(
@@ -395,23 +419,35 @@ class MessageQueueService:
         ).count()
         
         has_pending = pending_count > 0
-        logger.debug(f"Client {client_id} has {pending_count} pending messages")
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Client {client_id} has {pending_count} pending messages")
+        else:
+            logger.debug(f"Client {client_id} has {pending_count} pending messages")
         return has_pending
     
-    def check_if_message_superseded(self, message_id: str) -> bool:
+    def check_if_message_superseded(self, queue_item_id: str, message_id: str = None) -> bool:
         """
         Check if a message was marked as superseded during processing
         This is used to coordinate send_status between concurrent webhook calls
         """
-        logger.debug(f"Checking if message {message_id} was superseded")
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Checking if queue_item {queue_item_id} was superseded")
+        else:
+            logger.debug(f"Checking if queue_item {queue_item_id} was superseded")
         
-        message = self.db.query(MessageQueue).filter(MessageQueue.id == message_id).first()
+        message = self.db.query(MessageQueue).filter(MessageQueue.id == queue_item_id).first()
         if not message:
-            logger.warning(f"Message {message_id} not found when checking superseded status")
+            if message_id:
+                logger.warning(f"Message ID: {message_id} - Queue item {queue_item_id} not found when checking superseded status")
+            else:
+                logger.warning(f"Queue item {queue_item_id} not found when checking superseded status")
             return False
         
         is_superseded = message.status == MessageStatus.SUPERSEDED
-        logger.debug(f"Message {message_id} superseded status: {is_superseded}")
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Queue item {queue_item_id} superseded status: {is_superseded}")
+        else:
+            logger.debug(f"Queue item {queue_item_id} superseded status: {is_superseded}")
         return is_superseded
     
     def get_queue_stats(self, project_id: str) -> Dict[str, int]:
