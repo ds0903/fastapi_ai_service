@@ -6,6 +6,8 @@ from app.utils.prompt_loader import get_prompt, get_all_prompts
 
 
 class Settings(BaseSettings):
+    """Main application settings loaded from environment variables"""
+    
     # Database
     database_url: str = Field(default="postgresql://user:password@localhost/bot_db")
     redis_url: str = Field(default="redis://localhost:6379")
@@ -13,7 +15,7 @@ class Settings(BaseSettings):
     # Claude AI
     claude_api_key_1: str = Field(default="")
     claude_api_key_2: str = Field(default="")
-    claude_model: str = Field(default="claude-3-5-sonnet-20241022")
+    claude_model: str = Field(default="claude-sonnet-4-20250514")
     
     # Google Sheets
     google_credentials_file: str = Field(default="credentials.json")
@@ -58,6 +60,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        case_sensitive = False
 
 
 class ProjectConfig:
@@ -72,13 +75,9 @@ class ProjectConfig:
         self.services = {}  # service_name -> duration_in_slots
         self.specialists = []
         self.work_hours = {
-            "start": "09:00",
-            "end": "18:00"
+            "start": settings.default_work_start_time,
+            "end": settings.default_work_end_time
         }
-    
-
-    
-
     
     def update_prompt(self, prompt_type: str, new_prompt: str) -> None:
         """Update a specific Claude prompt"""
@@ -91,20 +90,8 @@ class ProjectConfig:
         """Get a specific Claude prompt"""
         return get_prompt(prompt_type)
     
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProjectConfig":
-        """Create ProjectConfig from dictionary"""
-        config = cls(data["project_id"])
-        config.database_table_name = data.get("database_table_name", config.database_table_name)
-        config.google_sheet_id = data.get("google_sheet_id", "")
-        config.google_drive_folder_id = data.get("google_drive_folder_id", "")
-        config.claude_prompts = data.get("claude_prompts", config.claude_prompts)
-        config.services = data.get("services", {})
-        config.specialists = data.get("specialists", [])
-        config.work_hours = data.get("work_hours", config.work_hours)
-        return config
-    
     def to_dict(self) -> Dict[str, Any]:
+        """Convert ProjectConfig to dictionary"""
         return {
             "project_id": self.project_id,
             "database_table_name": self.database_table_name,
@@ -118,15 +105,20 @@ class ProjectConfig:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProjectConfig":
+        """Create ProjectConfig from dictionary"""
         config = cls(data["project_id"])
         config.database_table_name = data.get("database_table_name", f"bookings_{data['project_id']}")
-        config.google_sheet_id = data.get("google_sheet_id", "")
+        config.google_sheet_id = data.get("google_sheet_id", settings.google_sheet_id)
         config.google_drive_folder_id = data.get("google_drive_folder_id", "")
-        config.claude_prompts = data.get("claude_prompts", {})
+        config.claude_prompts = data.get("claude_prompts", get_all_prompts())
         config.services = data.get("services", {})
         config.specialists = data.get("specialists", [])
-        config.work_hours = data.get("work_hours", {"start": "09:00", "end": "18:00"})
+        config.work_hours = data.get("work_hours", {
+            "start": settings.default_work_start_time,
+            "end": settings.default_work_end_time
+        })
         return config
 
 
+# Initialize global settings instance
 settings = Settings() 

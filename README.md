@@ -1,294 +1,356 @@
-# Telegram Bot Backend
+# Cosmetology Bot Backend
 
-FastAPI backend for SendPulse Telegram bot with AI management for booking services (beauty salons, nail technicians, etc.).
+FastAPI backend for Telegram bot that manages beauty salon appointments using AI (Claude) for natural language processing and Google Sheets for schedule management.
 
-## Features
+## 🎯 Features
 
-- **SendPulse Integration**: Receives and processes messages from SendPulse Telegram bot
-- **AI Message Processing**: Uses Claude AI for intent detection, service identification, and response generation
-- **Message Queue System**: Handles message flooding and aggregation
-- **Google Sheets Integration**: Syncs bookings to Google Sheets for easy management
-- **Booking Management**: Create, modify, and cancel bookings with availability checking
-- **Dialogue History**: Tracks client conversations with compression after 24 hours
-- **Multi-Project Support**: Scalable architecture for multiple independent projects
-- **PostgreSQL Database**: Persistent storage for bookings, dialogues, and configurations
+- **AI-Powered Chat**: Uses Claude AI to understand natural language booking requests
+- **Smart Scheduling**: Integrates with Google Sheets for real-time appointment management  
+- **Message Queue**: Handles message flooding and aggregation for smooth operation
+- **Multi-Project Support**: Scalable architecture for multiple salon locations
+- **Comprehensive Logging**: Detailed logging for monitoring and debugging
+- **Database Integration**: PostgreSQL for persistent data storage
+- **Rate Limiting**: Built-in protection against spam and abuse
 
-## Technical Stack
+## 🏗️ Architecture
 
-- **FastAPI**: Modern, fast web framework for building APIs
-- **PostgreSQL**: Database for persistent storage
-- **Redis**: Message queue and caching
-- **Claude AI**: Natural language processing and intent detection
-- **Google Sheets API**: Booking synchronization
-- **SQLAlchemy**: ORM for database operations
-- **Pydantic**: Data validation and serialization
+```
+Telegram → SendPulse → FastAPI Backend → Claude AI
+                           ↓
+                    Google Sheets ← PostgreSQL Database
+```
 
-## Installation
+## 🚀 Quick Start
 
-### Prerequisites
+### 1. Clone and Setup
 
-- Python 3.8+
-- PostgreSQL
-- Redis
-- Google Cloud Service Account (for Sheets integration)
-- Claude AI API keys
+```bash
+git clone <repository-url>
+cd cosmetology-bot-backend
+python -m venv venv
 
-### Setup
+# Windows
+venv\Scripts\activate
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd tg-bot-backend
-   ```
+# Mac/Linux  
+source venv/bin/activate
 
-2. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+pip install -r requirements.txt
+```
 
-3. **Create environment file**
-   ```bash
-   cp .env.example .env
-   ```
+### 2. Configure Environment
 
-4. **Configure environment variables**
-   Edit `.env` file with your configuration:
-   
-   ```env
-   # Database
-   DATABASE_URL=postgresql://user:password@localhost/bot_db
-   REDIS_URL=redis://localhost:6379
-   
-   # Claude AI
-   CLAUDE_API_KEY_1=your_claude_api_key_1
-   CLAUDE_API_KEY_2=your_claude_api_key_2
-   
-   # Google Sheets
-   GOOGLE_CREDENTIALS_FILE=path/to/google_credentials.json
-   
-   # SendPulse
-   SENDPULSE_WEBHOOK_SECRET=your_webhook_secret
-   ```
+```bash
+# Copy example configuration
+cp .env-example .env
 
-5. **Set up Google Sheets integration**
-   - Create a Google Cloud project
-   - Enable Google Sheets API and Google Drive API
-   - Create a service account and download credentials JSON
-   - Share your Google Sheets with the service account email
+# Edit .env file with your settings
+```
 
-6. **Initialize database**
-   ```bash
-   python -c "from app.database import create_tables; create_tables()"
-   ```
+### 3. Set Required Variables
 
-7. **Run the application**
-   ```bash
-   uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
+Edit `.env` file and set these **required** variables:
 
-## API Endpoints
+```env
+# Database (Required)
+DATABASE_URL=postgresql://username:password@localhost:5432/cosmetology_bot
+REDIS_URL=redis://localhost:6379
 
-### Main Webhook
-- `POST /webhook/sendpulse` - Receives messages from SendPulse
+# Claude AI (Required)  
+CLAUDE_API_KEY_1=sk-ant-api03-your_key_here
+CLAUDE_API_KEY_2=sk-ant-api03-your_backup_key_here
+CLAUDE_MODEL=claude-sonnet-4-20250514
 
-### Project Management
+# Application
+DEBUG=true
+HOST=0.0.0.0
+PORT=8000
+SECRET_KEY=your_very_secure_secret_key_here
+```
+
+### 4. Setup External Services
+
+#### PostgreSQL Database
+```sql
+CREATE DATABASE cosmetology_bot;
+CREATE USER bot_user WITH PASSWORD 'your_password';
+GRANT ALL PRIVILEGES ON DATABASE cosmetology_bot TO bot_user;
+```
+
+#### Redis
+- **Windows**: Download from [Redis releases](https://github.com/MicrosoftArchive/redis/releases)
+- **Mac**: `brew install redis && brew services start redis`
+- **Linux**: `sudo apt install redis-server && sudo systemctl start redis`
+
+#### Claude AI API Keys
+1. Go to [console.anthropic.com](https://console.anthropic.com)
+2. Create API keys in "API Keys" section
+3. Add both keys to `.env` for load balancing
+
+### 5. Start the Application
+
+```bash
+python start.py
+```
+
+The startup script will:
+- ✅ Validate all configuration
+- ✅ Create database tables
+- ✅ Test all connections
+- ✅ Start the FastAPI server
+
+## 🔧 Configuration System
+
+The application uses a centralized configuration system in `app/config.py` that loads settings from environment variables.
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `.env` | Your actual configuration (create from template) |
+| `.env-example` | Template with all available settings |
+| `app/config.py` | Configuration class definitions |
+| `check_settings.py` | Configuration validation script |
+
+### Settings Categories
+
+#### 🗄️ Database Settings
+```env
+DATABASE_URL=postgresql://user:pass@localhost:5432/db_name
+REDIS_URL=redis://localhost:6379
+```
+
+#### 🤖 Claude AI Settings
+```env
+CLAUDE_API_KEY_1=sk-ant-api03-your-primary-key
+CLAUDE_API_KEY_2=sk-ant-api03-your-backup-key  
+CLAUDE_MODEL=claude-sonnet-4-20250514
+```
+
+#### 📊 Google Sheets Settings (Optional)
+```env
+GOOGLE_CREDENTIALS_FILE=google-credentials.json
+GOOGLE_SHEET_ID=your_sheet_id_from_url
+```
+
+#### 🔗 SendPulse Settings (Optional)
+```env
+SENDPULSE_WEBHOOK_SECRET=your_webhook_secret
+SENDPULSE_API_TOKEN=your_api_token
+```
+
+#### ⚙️ Application Settings
+```env
+DEBUG=true                          # Enable debug mode
+HOST=0.0.0.0                       # Server host
+PORT=8000                          # Server port
+LOG_LEVEL=INFO                     # Logging level
+SECRET_KEY=your_secret_key         # Security key
+```
+
+#### 🏢 Business Settings
+```env
+DEFAULT_WORK_START_TIME=09:00      # Salon opening time
+DEFAULT_WORK_END_TIME=18:00        # Salon closing time
+SLOT_DURATION_MINUTES=30           # Appointment slot duration
+```
+
+#### 📬 Message Queue Settings
+```env
+MAX_QUEUE_SIZE=1000                # Maximum queue size
+MESSAGE_RETRY_ATTEMPTS=3           # Retry failed messages
+MESSAGE_PROCESSING_TIMEOUT=30      # Processing timeout (seconds)
+```
+
+#### 📁 Archive Settings  
+```env
+DIALOGUE_ARCHIVE_HOURS=24          # Archive old conversations
+ARCHIVE_COMPRESSION_ENABLED=true   # Compress archived data
+```
+
+#### 🛡️ Security Settings
+```env
+MAX_MESSAGES_PER_MINUTE=60         # Rate limiting
+FLOOD_PROTECTION_THRESHOLD=10      # Spam protection
+```
+
+## 🧪 Testing and Validation
+
+### Validate Configuration
+```bash
+python check_settings.py
+```
+
+This script will:
+- 📂 Check if `.env` file exists
+- ⚙️ Validate all settings values
+- 🔍 Test database and Redis connections  
+- 🤖 Verify Claude AI configuration
+- 📊 Check Google Sheets setup
+- 📝 Generate new `.env` template if needed
+
+### Test the API
+```bash
+# After starting the server
+python test_webhook.py
+```
+
+### Check Database Status
+```bash
+python check_db.py
+```
+
+## 📁 Project Structure
+
+```
+cosmetology-bot-backend/
+├── app/
+│   ├── config.py              # ⚙️ Configuration management
+│   ├── database.py            # 🗄️ Database models and connection
+│   ├── models.py              # 📋 Pydantic models
+│   ├── services/              # 🔧 Business logic services
+│   │   ├── claude_service.py  # 🤖 AI conversation handling
+│   │   ├── booking_service.py # 📅 Appointment management
+│   │   ├── google_sheets.py   # 📊 Spreadsheet integration
+│   │   ├── message_queue.py   # 📬 Message processing queue
+│   │   └── sendpulse_service.py # 📱 Telegram integration
+│   └── utils/
+│       └── prompt_loader.py   # 💬 AI prompt management
+├── main.py                    # 🚀 FastAPI application
+├── start.py                   # 🏁 Startup script with validation
+├── requirements.txt           # 📦 Python dependencies
+├── prompts.yml               # 💬 AI conversation prompts
+├── .env-example              # 📝 Configuration template
+├── check_settings.py         # ✅ Configuration validator
+├── test_webhook.py           # 🧪 API testing script
+└── check_db.py              # 🗄️ Database status checker
+```
+
+## 🔗 API Endpoints
+
+### Core Endpoints
+- `POST /webhook/sendpulse` - Main webhook for incoming messages
+- `GET /health` - Health check
+- `GET /` - Basic status
+
+### Project Management  
 - `GET /projects/{project_id}/config` - Get project configuration
 - `POST /projects/{project_id}/config` - Update project configuration
 - `GET /projects/{project_id}/stats` - Get project statistics
-- `GET /projects/{project_id}/queue` - Get message queue statistics
+- `GET /projects/{project_id}/queue` - Get message queue status
 
-### Health Check
-- `GET /health` - Health check endpoint
-- `GET /` - Basic status endpoint
+### Documentation
+- `GET /docs` - Interactive API documentation (Swagger UI)
+- `GET /redoc` - Alternative API documentation
 
-## Configuration
+## 🐛 Troubleshooting
 
-### Project Configuration
-
-Each project has its own configuration with:
-
-```python
-{
-    "project_id": "salon_abc",
-    "specialists": ["Anna", "Maria", "Elena"],
-    "services": {
-        "Haircut": 1,        # 1 slot (30 minutes)
-        "Coloring": 3,       # 3 slots (1.5 hours)
-        "Manicure": 2,       # 2 slots (1 hour)
-        "Massage": 2
-    },
-    "work_hours": {
-        "start": "09:00",
-        "end": "18:00"
-    },
-    "google_sheet_id": "your_google_sheet_id",
-    "claude_prompts": {
-        "intent_detection": "Custom prompt for intent detection",
-        "service_identification": "Custom prompt for service identification",
-        "main_response": "Custom prompt for main response",
-        "dialogue_compression": "Custom prompt for dialogue compression"
-    }
-}
-```
-
-### Google Sheets Format
-
-The system creates worksheets for each specialist with columns:
-- **A**: Date (DD.MM)
-- **B**: Full Date (DD.MM.YYYY)
-- **C**: Time (HH:MM)
-- **D**: Client ID
-- **E**: Client Name
-- **F**: Service Name
-
-## Message Processing Flow
-
-1. **Message Receipt**: SendPulse sends webhook with client message
-2. **Queue Processing**: Message is added to queue with flood protection
-3. **Intent Detection**: Claude analyzes message to determine client intent
-4. **Service Identification**: If booking intent, identify requested service
-5. **Availability Check**: Query Google Sheets for available time slots
-6. **Response Generation**: Claude generates appropriate response
-7. **Booking Actions**: Execute booking operations if requested
-8. **Response Delivery**: Send response back to client via SendPulse
-
-## Booking Operations
-
-### Activate Booking
-Creates a new booking with:
-- Specialist selection
-- Date and time
-- Service type
-- Client information
-- Duration calculation
-
-### Reject Booking
-Cancels existing booking:
-- Finds booking by specialist, date, time
-- Marks as cancelled
-- Updates Google Sheets
-
-### Change Booking
-Modifies existing booking:
-- Finds current booking
-- Validates new time slot
-- Updates booking details
-- Syncs to Google Sheets
-
-## Dialogue Management
-
-- **Real-time Storage**: All conversations stored in database
-- **History Tracking**: Maintains conversation context for AI
-- **Automatic Archiving**: Compresses dialogues after 24 hours inactivity
-- **Context Preservation**: Compressed history available for future reference
-
-## Error Handling
-
-- **Retry Logic**: Automatic retry for failed operations
-- **Fallback Responses**: Default responses when AI fails
-- **Logging**: Comprehensive error logging
-- **Queue Recovery**: Message queue recovery mechanisms
-
-## Monitoring
-
-### Statistics Available
-- Total messages processed
-- Active bookings count
-- Client engagement metrics
-- Queue processing statistics
-- Dialogue archiving metrics
-
-### Health Checks
-- Database connectivity
-- Redis availability
-- Claude API status
-- Google Sheets access
-
-## Development
-
-### Running Tests
+### Configuration Issues
 ```bash
-python -m pytest tests/
+# Check all settings
+python check_settings.py
+
+# View logs in real-time
+tail -f app.log    # Linux/Mac
+Get-Content app.log -Wait    # Windows PowerShell
 ```
 
-### Database Migrations
+### Common Problems
+
+**1. Database Connection Failed**
 ```bash
-alembic revision --autogenerate -m "description"
-alembic upgrade head
+# Check PostgreSQL status
+sudo systemctl status postgresql    # Linux
+brew services list | grep postgresql    # Mac
+
+# Verify database exists
+psql -U postgres -c "\l"
 ```
 
-### Adding New Services
-1. Update project configuration
-2. Add service to `services` dict with slot count
-3. Update Claude prompts if needed
-4. Test booking flow
+**2. Redis Connection Failed**  
+```bash
+# Check Redis status
+redis-cli ping    # Should return "PONG"
 
-## Deployment
-
-### Docker Deployment
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start Redis if not running
+sudo systemctl start redis    # Linux
+brew services start redis    # Mac
 ```
 
-### Environment Variables for Production
-- Set `DEBUG=False`
-- Use secure database credentials
-- Configure proper Redis instance
-- Set up SSL certificates
-- Configure logging level
+**3. Claude API Errors**
+- Check API keys are valid and have credits
+- Verify model name is correct
+- Check rate limits in Anthropic console
 
-## Security
+**4. Application Won't Start**
+```bash
+# Run with detailed validation
+python start.py
 
-- **Webhook Verification**: Validate SendPulse webhook signatures
-- **API Rate Limiting**: Prevent abuse
-- **Data Encryption**: Encrypt sensitive client data
-- **Access Control**: Implement proper authentication
-- **Input Validation**: Sanitize all inputs
+# Check specific settings
+python check_settings.py
 
-## Scaling
+# Manual database check
+python check_db.py
+```
 
-- **Horizontal Scaling**: Multiple FastAPI instances
-- **Database Scaling**: PostgreSQL read replicas
-- **Message Queue**: Redis cluster for high availability
-- **Caching**: Redis caching for frequently accessed data
-- **CDN**: Content delivery for static assets
+## 📊 Monitoring
 
-## Troubleshooting
+### Log Levels
+- `DEBUG`: Detailed information for debugging
+- `INFO`: General operational information  
+- `WARNING`: Warning messages about potential issues
+- `ERROR`: Error conditions that need attention
 
-### Common Issues
+### Log Files
+- `app.log`: Application logs with rotation
+- Console output: Real-time logging during development
 
-1. **Claude API Rate Limits**
-   - Implemented load balancing between API keys
-   - Automatic retry with exponential backoff
+### Health Monitoring
+```bash
+# Check application health
+curl http://localhost:8000/health
 
-2. **Google Sheets Quota**
-   - Batch operations where possible
-   - Implement caching for read operations
+# Get project statistics  
+curl http://localhost:8000/projects/default/stats
 
-3. **Database Connections**
-   - Connection pooling configured
-   - Automatic reconnection on failures
+# Monitor message queue
+curl http://localhost:8000/projects/default/queue
+```
 
-4. **Message Queue Issues**
-   - Redis persistence enabled
-   - Queue recovery mechanisms
+## 🔄 Development Workflow
 
-### Logs Location
-- Application logs: `/var/log/app/`
-- Error logs: `/var/log/app/errors.log`
-- Access logs: `/var/log/app/access.log`
+### Making Configuration Changes
+1. Update `.env` file with new values
+2. Restart application: `python start.py`
+3. Validate changes: `python check_settings.py`
 
-## Support
+### Adding New Settings
+1. Add field to `Settings` class in `app/config.py`
+2. Add to `.env-example` with example value
+3. Update documentation
+4. Use setting via `settings.new_field_name`
 
-For technical support or feature requests, please create an issue in the repository.
+### Database Changes
+1. Modify models in `app/database.py`
+2. Restart application to create new tables
+3. Use `check_db.py` to verify changes
 
-## License
+## 📞 Support
 
-This project is licensed under the MIT License. 
+### Getting Help
+- 📖 Check this README for common solutions
+- 🔧 Run `python check_settings.py` for configuration issues
+- 📊 Use `python check_db.py` for database problems
+- 📝 Check `app.log` for detailed error messages
+
+### Reporting Issues
+When reporting problems, include:
+- Output from `python check_settings.py`
+- Relevant logs from `app.log`
+- Steps to reproduce the issue
+- Environment details (OS, Python version)
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 

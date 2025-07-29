@@ -18,7 +18,7 @@ engine = create_engine(
     pool_timeout=30,       # Seconds to wait for connection
     pool_recycle=3600,     # Recycle connections after 1 hour
     pool_pre_ping=True,    # Validate connections before use
-    echo=False             # Set to True for SQL query logging
+    echo=settings.debug    # SQL query logging based on debug mode
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -58,12 +58,27 @@ class MessageQueue(Base):
     client_id = Column(String, nullable=False, index=True)
     original_message = Column(Text, nullable=False)
     aggregated_message = Column(Text, nullable=False)
-    status = Column(String, default="pending", index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    status = Column(String, nullable=False, default="pending")
+    priority = Column(Integer, default=0)
     retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=settings.message_retry_attempts)
+    processing_timeout = Column(Integer, default=settings.message_processing_timeout)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
     
     project = relationship("Project", back_populates="messages")
+
+
+class ClientLastActivity(Base):
+    __tablename__ = "client_last_activity"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(String, ForeignKey("projects.project_id"), nullable=False)
+    client_id = Column(String, nullable=False, index=True)
+    last_message_time = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Booking(Base):
@@ -71,16 +86,17 @@ class Booking(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(String, ForeignKey("projects.project_id"), nullable=False)
-    specialist_name = Column(String, nullable=False, index=True)
-    date = Column(Date, nullable=False, index=True)
-    time = Column(Time, nullable=False)
     client_id = Column(String, nullable=False, index=True)
-    client_name = Column(String, nullable=True)
-    service_name = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
-    duration_slots = Column(Integer, default=1)
-    status = Column(String, default="active", index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    client_name = Column(String, nullable=False)
+    client_phone = Column(String, nullable=True)
+    specialist_name = Column(String, nullable=False)
+    service_name = Column(String, nullable=False)
+    appointment_date = Column(Date, nullable=False, index=True)
+    appointment_time = Column(Time, nullable=False)
+    duration_minutes = Column(Integer, default=settings.slot_duration_minutes)
+    status = Column(String, nullable=False, default="active")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     project = relationship("Project", back_populates="bookings")
@@ -92,27 +108,14 @@ class Dialogue(Base):
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(String, ForeignKey("projects.project_id"), nullable=False)
     client_id = Column(String, nullable=False, index=True)
-    role = Column(String, nullable=False)  # 'client' or 'claude'
+    role = Column(String, nullable=False)  # "client" or "claude"
     message = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     is_archived = Column(Boolean, default=False)
+    archive_hours = Column(Integer, default=settings.dialogue_archive_hours)
+    compressed_content = Column(Text, nullable=True)
     
     project = relationship("Project", back_populates="dialogues")
-
-
-class ClientLastActivity(Base):
-    __tablename__ = "client_last_activity"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(String, ForeignKey("projects.project_id"), nullable=False)
-    client_id = Column(String, nullable=False, index=True)
-    last_message_at = Column(DateTime, nullable=False)
-    zip_history = Column(Text, nullable=True)
-    
-    __table_args__ = (
-        # Ensure unique combination of project_id and client_id
-        {'schema': None},
-    )
 
 
 class Feedback(Base):
@@ -121,21 +124,13 @@ class Feedback(Base):
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(String, ForeignKey("projects.project_id"), nullable=False)
     client_id = Column(String, nullable=False, index=True)
-    client_name = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
-    feedback_text = Column(Text, nullable=False)
-    feedback_date = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True)
+    rating = Column(Integer, nullable=True)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     
     project = relationship("Project", back_populates="feedback_records")
-
-
-class ProcessingCounter(Base):
-    __tablename__ = "processing_counter"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    counter_value = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    booking = relationship("Booking")
 
 
 def create_tables():
@@ -143,20 +138,9 @@ def create_tables():
     Base.metadata.create_all(bind=engine)
 
 
-def get_or_create_counter(db: Session) -> ProcessingCounter:
-    """Get or create processing counter for Claude load balancing"""
-    counter = db.query(ProcessingCounter).first()
-    if not counter:
-        counter = ProcessingCounter()
-        db.add(counter)
-        db.commit()
-        db.refresh(counter)
-    return counter
-
-
-def increment_counter(db: Session) -> int:
-    """Increment and return processing counter"""
-    counter = get_or_create_counter(db)
-    counter.counter_value += 1
-    db.commit()
-    return counter.counter_value 
+def drop_tables():
+    """Drop all database tables (use with caution!)"""
+    if settings.debug:  # Only allow in debug mode
+        Base.metadata.drop_all(bind=engine)
+    else:
+        raise RuntimeError("Cannot drop tables in production mode") 
