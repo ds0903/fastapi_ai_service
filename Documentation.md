@@ -366,6 +366,19 @@ sudo systemctl stop cosmetology-bot
 sudo systemctl start cosmetology-bot
 ```
 
+## 2. Вручную
+
+**Сначала нужно запустить виртуальное окружение**
+```bash
+cd cosmetology-bot-backend
+source .venv/bin/activate
+```
+
+**Теперь запускаем проект (будет запущен пока мы его держим запущенным руками, для запуска в бекграунде нужно использовать linux-service)**
+`uvicorn main:app --host 0.0.0.0 --port 8000 --reload`
+
+**Для остановки проекта - `CTRL+C`**
+
 
 ---
 
