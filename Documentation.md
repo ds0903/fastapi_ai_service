@@ -282,7 +282,7 @@ app/
 
 ---
 
-## 🧪 Как тестировать систему
+## 🧪 Как тестировать систему (ЛОКАЛЬНО)
 
 ### 1. Проверка запуска
 
@@ -313,6 +313,58 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 #### Получение статистики:
 - **GET** `/projects/default/stats` - покажет количество сообщений и записей
+
+## 🧪 Как тестировать систему (НА СЕРВЕРЕ)
+
+### 1. Через linux-service
+
+**Проверить существование сервиса для проекта.**
+`systemctl list-units --type=service`
+**На момент написания, на сервере сервис имеет название `cosmetology-bot.service`**
+**Если сервис не создан - создать его**
+```bash
+sudo nano /etc/systemd/system/cosmetology-bot.service
+
+### Содержимое файла с сервисом:
+[Unit]
+Description=Cosmetology Bot Backend
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/cosmetology-bot-backend
+ExecStart=/root/cosmetology-bot-backend/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8001
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Reload systemd to recognize new service
+sudo systemctl daemon-reload
+
+# Enable service (start at boot)
+sudo systemctl enable cosmetology-bot
+
+# Start the service
+sudo systemctl start cosmetology-bot
+
+# Check service status
+sudo systemctl status cosmetology-bot
+```
+
+**Для перезапуска проекта (в случае внесения изменений)**
+```bash
+sudo systemctl restart cosmetology-bot
+
+## OR
+
+sudo systemctl stop cosmetology-bot
+sudo systemctl start cosmetology-bot
+```
 
 
 ---

@@ -1,8 +1,10 @@
 import json
 import asyncio
-from typing import Dict, Any, Optional, List
+import random
+from typing import Dict, Any, Optional
 from datetime import datetime
 from anthropic import AsyncAnthropic
+from anthropic import InternalServerError, RateLimitError, APIConnectionError
 from sqlalchemy.orm import Session
 import logging
 
@@ -11,16 +13,15 @@ from ..utils.prompt_loader import get_prompt
 from ..models import (
     IntentDetectionResult, 
     ServiceIdentificationResult, 
-    ClaudeMainResponse,
-    DialogueHistory
+    ClaudeMainResponse
 )
-from ..database import increment_counter
+
 
 logger = logging.getLogger(__name__)
 
 
 class ClaudeService:
-    """Service for handling Claude AI interactions"""
+    """Service for handling Claude AI interactions with improved error handling and retry logic"""
     
     def __init__(self, db: Session):
         self.db = db
@@ -28,18 +29,28 @@ class ClaudeService:
             self.client1 = AsyncAnthropic(api_key=settings.claude_api_key_1)
             self.client2 = AsyncAnthropic(api_key=settings.claude_api_key_2)
             logger.debug("ClaudeService initialized with two async API clients")
+            
+            # Circuit breaker state for each client
+            self.client1_failures = 0
+            self.client2_failures = 0
+            self.client1_last_failure = None
+            self.client2_last_failure = None
+            self.max_failures = 3
+            self.circuit_timeout = 300  # 5 minutes
+            
+            # Simple counter for load balancing
+            self.request_counter = 0
+            
         except Exception as e:
             logger.error(f"Failed to initialize Claude clients: {e}")
             raise
     
-    def _get_claude_client(self, counter: int, message_id: str = None) -> AsyncAnthropic:
-        """Get Claude client based on counter for load balancing"""
-        client = self.client1 if counter % 2 == 0 else self.client2
-        if message_id:
-            logger.debug(f"Message ID: {message_id} - Selected Claude client {1 if counter % 2 == 0 else 2} for counter {counter}")
-        else:
-            logger.debug(f"Selected Claude client {1 if counter % 2 == 0 else 2} for counter {counter}")
-        return client
+    def _increment_counter(self) -> int:
+        """Increment and return request counter for load balancing"""
+        self.request_counter += 1
+        return self.request_counter
+    
+
     
     def _truncate_dialogue_for_logging(self, dialogue_history: str) -> str:
         """Truncate dialogue history to last 3 messages for logging purposes"""
@@ -55,6 +66,141 @@ class ClaudeService:
         else:
             return '\n'.join(last_lines)
     
+    def _is_client_circuit_open(self, client_num: int) -> bool:
+        """Check if circuit breaker is open for a client"""
+        if client_num == 1:
+            failures = self.client1_failures
+            last_failure = self.client1_last_failure
+        else:
+            failures = self.client2_failures
+            last_failure = self.client2_last_failure
+            
+        if failures >= self.max_failures and last_failure:
+            time_since_failure = (datetime.utcnow() - last_failure).total_seconds()
+            return time_since_failure < self.circuit_timeout
+        return False
+    
+    def _record_client_failure(self, client_num: int, message_id: str = None):
+        """Record a failure for circuit breaker"""
+        if client_num == 1:
+            self.client1_failures += 1
+            self.client1_last_failure = datetime.utcnow()
+            logger.warning(f"Message ID: {message_id} - Client 1 failure recorded: {self.client1_failures}/{self.max_failures}")
+        else:
+            self.client2_failures += 1
+            self.client2_last_failure = datetime.utcnow()
+            logger.warning(f"Message ID: {message_id} - Client 2 failure recorded: {self.client2_failures}/{self.max_failures}")
+    
+    def _record_client_success(self, client_num: int, message_id: str = None):
+        """Record a success for circuit breaker (reset failures)"""
+        if client_num == 1:
+            if self.client1_failures > 0:
+                logger.info(f"Message ID: {message_id} - Client 1 success - resetting failure count from {self.client1_failures}")
+                self.client1_failures = 0
+                self.client1_last_failure = None
+        else:
+            if self.client2_failures > 0:
+                logger.info(f"Message ID: {message_id} - Client 2 success - resetting failure count from {self.client2_failures}")
+                self.client2_failures = 0
+                self.client2_last_failure = None
+    
+    def _get_available_claude_client(self, counter: int, message_id: str = None) -> tuple[AsyncAnthropic, int]:
+        """Get available Claude client with circuit breaker logic"""
+        # Try preferred client first
+        preferred_client_num = 1 if counter % 2 == 0 else 2
+        
+        if not self._is_client_circuit_open(preferred_client_num):
+            client = self.client1 if preferred_client_num == 1 else self.client2
+            logger.debug(f"Message ID: {message_id} - Using preferred client {preferred_client_num}")
+            return client, preferred_client_num
+        
+        # Try alternative client
+        alternative_client_num = 2 if preferred_client_num == 1 else 1
+        if not self._is_client_circuit_open(alternative_client_num):
+            client = self.client2 if alternative_client_num == 2 else self.client1
+            logger.warning(f"Message ID: {message_id} - Client {preferred_client_num} circuit open, using client {alternative_client_num}")
+            return client, alternative_client_num
+        
+        # Both circuits open - use preferred anyway with warning
+        client = self.client1 if preferred_client_num == 1 else self.client2
+        logger.error(f"Message ID: {message_id} - Both clients have circuit breakers open, using client {preferred_client_num} anyway")
+        return client, preferred_client_num
+    
+    async def _retry_claude_request(self, request_func, max_retries: int = 3, message_id: str = None):
+        """Retry Claude request with exponential backoff"""
+        base_delay = 1.0
+        
+        for attempt in range(max_retries + 1):
+            try:
+                counter = self._increment_counter()
+                client, client_num = self._get_available_claude_client(counter, message_id)
+                
+                logger.debug(f"Message ID: {message_id} - Attempt {attempt + 1}/{max_retries + 1} using client {client_num}")
+                
+                # Execute the request
+                result = await request_func(client)
+                
+                # Record success
+                self._record_client_success(client_num, message_id)
+                logger.debug(f"Message ID: {message_id} - Request successful on attempt {attempt + 1}")
+                return result
+                
+            except InternalServerError as e:
+                # Handle 529 overloaded and other 5xx errors
+                if hasattr(e, 'status_code') and e.status_code == 529:
+                    logger.warning(f"Message ID: {message_id} - Claude API overloaded (529) on attempt {attempt + 1}")
+                else:
+                    logger.warning(f"Message ID: {message_id} - Claude internal server error on attempt {attempt + 1}: {e}")
+                
+                # Record failure for circuit breaker
+                if 'client_num' in locals():
+                    self._record_client_failure(client_num, message_id)
+                
+                if attempt < max_retries:
+                    # Calculate delay with jitter
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.info(f"Message ID: {message_id} - Retrying in {delay:.2f} seconds...")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Message ID: {message_id} - All retry attempts exhausted for Claude request")
+                    raise
+                    
+            except RateLimitError as e:
+                logger.warning(f"Message ID: {message_id} - Claude rate limit exceeded on attempt {attempt + 1}: {e}")
+                
+                if 'client_num' in locals():
+                    self._record_client_failure(client_num, message_id)
+                
+                if attempt < max_retries:
+                    # Longer delay for rate limits
+                    delay = base_delay * (3 ** attempt) + random.uniform(0, 2)
+                    logger.info(f"Message ID: {message_id} - Rate limited, retrying in {delay:.2f} seconds...")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    raise
+                    
+            except APIConnectionError as e:
+                logger.warning(f"Message ID: {message_id} - Claude API connection error on attempt {attempt + 1}: {e}")
+                
+                if 'client_num' in locals():
+                    self._record_client_failure(client_num, message_id)
+                
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.info(f"Message ID: {message_id} - Connection error, retrying in {delay:.2f} seconds...")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    raise
+                    
+            except Exception as e:
+                logger.error(f"Message ID: {message_id} - Unexpected error in Claude request: {e}")
+                if 'client_num' in locals():
+                    self._record_client_failure(client_num, message_id)
+                raise
+    
     async def detect_intent(
         self, 
         project_config: ProjectConfig,
@@ -69,9 +215,6 @@ class ClaudeService:
         logger.info(f"Message ID: {message_id} - Starting intent detection for project {project_config.project_id}")
         logger.debug(f"Message ID: {message_id} - Message for intent detection: '{current_message[:100]}...'")
         
-        counter = increment_counter(self.db)
-        client = self._get_claude_client(counter, message_id)
-        
         prompt = self._build_intent_detection_prompt(
             project_config, 
             dialogue_history, 
@@ -83,11 +226,17 @@ class ClaudeService:
         try:
             truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
             logger.info(f"Message ID: {message_id} - Sending async request to Claude for intent detection. Dialogue history: {truncated_history}, current message: {current_message}")
-            response = await client.messages.create(
-                model=settings.claude_model,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            
+            # Define the request function for retry mechanism
+            async def make_request(client):
+                return await client.messages.create(
+                    model=settings.claude_model,
+                    max_tokens=1000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            
+            # Use retry mechanism
+            response = await self._retry_claude_request(make_request, max_retries=3, message_id=message_id)
             
             raw_response = response.content[0].text
             logger.info(f"Message ID: {message_id} - Claude raw response for intent detection: {raw_response}")
@@ -123,9 +272,6 @@ class ClaudeService:
         logger.info(f"Message ID: {message_id} - Starting service identification for project {project_config.project_id}")
         logger.debug(f"Message ID: {message_id} - Available services: {list(project_config.services.keys())}")
         
-        counter = increment_counter(self.db)
-        client = self._get_claude_client(counter, message_id)
-        
         prompt = self._build_service_identification_prompt(
             project_config,
             dialogue_history,
@@ -137,11 +283,17 @@ class ClaudeService:
         try:
             truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
             logger.info(f"Message ID: {message_id} - Sending async request to Claude for service identification. Dialogue history: {truncated_history}, current message: {current_message}")
-            response = await client.messages.create(
-                model=settings.claude_model,
-                max_tokens=500,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            
+            # Define the request function for retry mechanism
+            async def make_request(client):
+                return await client.messages.create(
+                    model=settings.claude_model,
+                    max_tokens=500,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            
+            # Use retry mechanism
+            response = await self._retry_claude_request(make_request, max_retries=3, message_id=message_id)
             
             raw_response = response.content[0].text
             logger.info(f"Message ID: {message_id} - Claude raw response for service identification: {raw_response}")
@@ -185,9 +337,6 @@ class ClaudeService:
         logger.debug(f"Message ID: {message_id} - Available slots count: {len(available_slots)}, reserved slots count: {len(reserved_slots)}")
         logger.debug(f"Message ID: {message_id} - Current message: '{current_message[:100]}...'")
         
-        counter = increment_counter(self.db)
-        client = self._get_claude_client(counter, message_id)
-        
         prompt = self._build_main_response_prompt(
             project_config,
             dialogue_history,
@@ -205,11 +354,17 @@ class ClaudeService:
         try:
             truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
             logger.info(f"Message ID: {message_id} - Sending async request to Claude for main response generation. Dialogue history: {truncated_history}, current message: {current_message}, current date: {current_date}, available slots: {available_slots}, reserved slots: {reserved_slots}, rows of owner: {rows_of_owner}, zip history: {zip_history}, record error: {record_error}")
-            response = await client.messages.create(
-                model=settings.claude_model,
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            
+            # Define the request function for retry mechanism
+            async def make_request(client):
+                return await client.messages.create(
+                    model=settings.claude_model,
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            
+            # Use retry mechanism
+            response = await self._retry_claude_request(make_request, max_retries=3, message_id=message_id)
             
             raw_response = response.content[0].text
             logger.info(f"Message ID: {message_id} - Claude raw response for main response: {raw_response}")
@@ -250,21 +405,23 @@ class ClaudeService:
         Module 4: Dialogue compression
         Compresses old dialogue to save tokens
         """
-        counter = increment_counter(self.db)
-        client = self._get_claude_client(counter)
-        
         prompt = self._build_compression_prompt(project_config, dialogue_history)
         
         try:
-            response = await client.messages.create(
-                model=settings.claude_model,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            # Define the request function for retry mechanism
+            async def make_request(client):
+                return await client.messages.create(
+                    model=settings.claude_model,
+                    max_tokens=1000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
             
+            # Use retry mechanism
+            response = await self._retry_claude_request(make_request, max_retries=2, message_id=None)
             return response.content[0].text.strip()
             
         except Exception as e:
+            logger.warning(f"Dialogue compression failed: {e}, using fallback")
             return dialogue_history[:500] + "..."
     
     def _build_intent_detection_prompt(
