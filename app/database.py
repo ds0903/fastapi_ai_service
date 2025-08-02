@@ -76,7 +76,7 @@ class ClientLastActivity(Base):
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(String, ForeignKey("projects.project_id"), nullable=False)
     client_id = Column(String, nullable=False, index=True)
-    last_message_time = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_message_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
