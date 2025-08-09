@@ -168,7 +168,7 @@ class GoogleSheetsService:
         # Group bookings by date
         bookings_by_date = {}
         for booking in bookings:
-            date_key = booking.date
+            date_key = booking.appointment_date
             if date_key not in bookings_by_date:
                 bookings_by_date[date_key] = []
             bookings_by_date[date_key].append(booking)
@@ -180,7 +180,7 @@ class GoogleSheetsService:
         
         for current_date in sorted_dates:
             date_bookings = bookings_by_date[current_date]
-            date_bookings.sort(key=lambda b: b.time)
+            date_bookings.sort(key=lambda b: b.appointment_time)
             
             # Generate time slots for the day
             work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
@@ -189,7 +189,7 @@ class GoogleSheetsService:
             current_time = datetime.combine(current_date, work_start)
             end_time = datetime.combine(current_date, work_end)
             
-            booking_dict = {booking.time: booking for booking in date_bookings}
+            booking_dict = {booking.appointment_time: booking for booking in date_bookings}
             
             # First row of the day - show date in format DD.MM
             first_row_of_day = True
@@ -212,7 +212,8 @@ class GoogleSheetsService:
                     ]
                     
                     # Fill additional slots for multi-slot bookings
-                    for i in range(booking.duration_slots):
+                    booking_duration_slots = booking.duration_minutes // 30
+                    for i in range(booking_duration_slots):
                         if i == 0:
                             worksheet.update(f'A{row}:F{row}', [row_data])
                         else:
@@ -224,7 +225,7 @@ class GoogleSheetsService:
                         row += 1
                     
                     # Skip the additional slots in the loop
-                    current_time += timedelta(minutes=30 * booking.duration_slots)
+                    current_time += timedelta(minutes=30 * booking_duration_slots)
                 else:
                     # Empty slot
                     row_data = [
@@ -251,14 +252,16 @@ class GoogleSheetsService:
     
     def get_available_slots(self, db: Session, target_date: date, time_fraction: int) -> AvailableSlots:
         """Get available slots for a specific date"""
+        logger.info(f"Getting available slots for date {target_date} with time_fraction {time_fraction}")
         # Get all bookings for the date
         bookings = db.query(Booking).filter(
             and_(
                 Booking.project_id == self.project_config.project_id,
-                Booking.date == target_date,
+                Booking.appointment_date == target_date,
                 Booking.status == "active"
             )
         ).all()
+        logger.debug(f"Found {len(bookings)} active bookings for date {target_date}")
         
         # Group bookings by specialist
         bookings_by_specialist = {}
@@ -270,17 +273,22 @@ class GoogleSheetsService:
         # Generate available slots for each specialist
         available_slots = {}
         
+        logger.debug(f"Project specialists: {self.project_config.specialists}")
         for specialist in self.project_config.specialists:
             specialist_bookings = bookings_by_specialist.get(specialist, [])
+            logger.debug(f"Specialist {specialist} has {len(specialist_bookings)} bookings for date {target_date}")
             slots = self._get_available_slots_for_specialist(
                 specialist_bookings, target_date, time_fraction
             )
             available_slots[f"available_slots_{specialist.lower()}"] = slots
+            logger.debug(f"Specialist {specialist} has {len(slots)} available slots: {slots}")
         
-        return AvailableSlots(
+        result = AvailableSlots(
             date_of_checking=target_date.strftime("%d.%m"),
             slots_by_specialist=available_slots
         )
+        logger.info(f"Returning available slots for {target_date}: {len(available_slots)} specialists with total slots")
+        return result
     
     async def get_available_slots_by_time_range_async(
         self, 
@@ -319,7 +327,7 @@ class GoogleSheetsService:
             bookings = db.query(Booking).filter(
                 and_(
                     Booking.project_id == self.project_config.project_id,
-                    Booking.date == check_date,
+                    Booking.appointment_date == check_date,
                     Booking.status == "active"
                 )
             ).all()
@@ -364,12 +372,14 @@ class GoogleSheetsService:
         """Get available slots for a specific specialist on a specific date"""
         work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
         work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
+        logger.debug(f"Calculating slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
         
         # Create set of occupied time slots
         occupied_slots = set()
         for booking in bookings:
-            booking_time = datetime.combine(target_date, booking.time)
-            for i in range(booking.duration_slots):
+            booking_time = datetime.combine(target_date, booking.appointment_time)
+            booking_duration_slots = booking.duration_minutes // 30
+            for i in range(booking_duration_slots):
                 slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
         
@@ -394,6 +404,7 @@ class GoogleSheetsService:
             
             current_time += timedelta(minutes=30)
         
+        logger.debug(f"Generated {len(available_slots)} available slots for {target_date}: {available_slots}")
         return available_slots
     
     def _get_available_slots_for_specialist_in_time_range(
@@ -417,8 +428,9 @@ class GoogleSheetsService:
         # Create set of occupied time slots
         occupied_slots = set()
         for booking in bookings:
-            booking_time = datetime.combine(target_date, booking.time)
-            for i in range(booking.duration_slots):
+            booking_time = datetime.combine(target_date, booking.appointment_time)
+            booking_duration_slots = booking.duration_minutes // 30
+            for i in range(booking_duration_slots):
                 slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
         
@@ -469,7 +481,7 @@ class GoogleSheetsService:
             logger.warning("Cannot update booking slot: no spreadsheet connection")
             return False
         
-        logger.info(f"Updating single booking slot for {specialist_name}: {booking.date} {booking.time}")
+        logger.info(f"Updating single booking slot for {specialist_name}: {booking.appointment_date} {booking.appointment_time}")
         
         try:
             # Get or create worksheet for specialist
@@ -485,7 +497,7 @@ class GoogleSheetsService:
                 self._setup_worksheet_static_structure(worksheet)
             
             # Find the correct row for this time slot
-            target_row = self._find_row_for_time_slot(worksheet, booking.date, booking.time)
+            target_row = self._find_row_for_time_slot(worksheet, booking.appointment_date, booking.appointment_time)
             
             if target_row:
                 # Update only the booking data columns (D, E, F)
@@ -500,19 +512,20 @@ class GoogleSheetsService:
                 worksheet.update(range_update, [booking_data])
                 
                 # If this is a multi-slot booking, fill additional rows with dashes
-                if booking.duration_slots > 1:
-                    logger.info(f"Booking requires {booking.duration_slots} slots, filling additional {booking.duration_slots - 1} rows with dashes")
-                    for i in range(1, booking.duration_slots):
+                duration_slots = booking.duration_minutes // 30
+                if duration_slots > 1:
+                    logger.info(f"Booking requires {duration_slots} slots, filling additional {duration_slots - 1} rows with dashes")
+                    for i in range(1, duration_slots):
                         additional_row = target_row + i
                         dash_data = ["-", "-", "-"]  # D, E, F columns
                         dash_range = f'D{additional_row}:F{additional_row}'
                         worksheet.update(dash_range, [dash_data])
                         logger.debug(f"  Filled row {additional_row} with dashes for multi-slot booking")
                 
-                logger.info(f"Successfully updated booking slot(s) starting at row {target_row} for {specialist_name} ({booking.duration_slots} slots total)")
+                logger.info(f"Successfully updated booking slot(s) starting at row {target_row} for {specialist_name} ({duration_slots} slots total)")
                 return True
             else:
-                logger.error(f"Could not find row for time slot {booking.time} on {booking.date}")
+                logger.error(f"Could not find row for time slot {booking.appointment_time} on {booking.appointment_date}")
                 return False
                 
         except Exception as e:

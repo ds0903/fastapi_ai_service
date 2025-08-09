@@ -433,6 +433,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             if not intent_result.waiting:
                 # Client is not just chatting - need service info and slots
                 logger.info(f"Message ID: {message_id} - Running parallel service identification and slot fetching for client_id={client_id}")
+                logger.debug(f"Message ID: {message_id} - Intent result: waiting={intent_result.waiting}, date_order={intent_result.date_order}, desire_time0={intent_result.desire_time0}, desire_time1={intent_result.desire_time1}")
                 
                 # Prepare tasks that can run in parallel
                 tasks = []
@@ -448,6 +449,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 
                 # Task 2: Get slots based on intent (if we have date/time info)
                 slot_task = None
+                logger.debug(f"Message ID: {message_id} - Checking intent conditions for slot fetching: date_order='{intent_result.date_order}', desire_time0='{intent_result.desire_time0}', desire_time1='{intent_result.desire_time1}'")
                 if intent_result.date_order:
                     logger.debug(f"Message ID: {message_id} - Preparing slot fetch for specific date {intent_result.date_order}")
                     target_date = parse_date(intent_result.date_order)
@@ -462,6 +464,11 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                         slot_task = sheets_service.get_available_slots_by_time_range_async(
                             db, start_time, end_time, 1
                         )
+                
+                if slot_task:
+                    logger.debug(f"Message ID: {message_id} - Slot task created, will fetch slots")
+                else:
+                    logger.warning(f"Message ID: {message_id} - No slot task created - intent detection conditions not met for slot fetching")
                 
                 if slot_task:
                     tasks.append(slot_task)
@@ -536,7 +543,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 
             else:
                 # Client is just chatting/waiting - only need basic info
-                logger.debug(f"Message ID: {message_id} - Client is waiting/chatting for client_id={client_id}, skipping service identification and slot fetching")
+                logger.info(f"Message ID: {message_id} - Client is waiting/chatting for client_id={client_id} (waiting={intent_result.waiting}), skipping service identification and slot fetching")
                 try:
                     client_bookings = await asyncio.to_thread(booking_service.get_client_bookings_as_string, client_id)
                 except Exception as e:
@@ -546,6 +553,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             
             # Step 3: Generate main response (async)
             logger.info(f"Message ID: {message_id} - Generating main response for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - SENDING TO CLAUDE: available_slots={available_slots}, reserved_slots={reserved_slots}")
             try:
                 main_response = await claude_service.generate_main_response(
                     project_config,

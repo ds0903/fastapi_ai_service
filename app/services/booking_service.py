@@ -144,13 +144,13 @@ class BookingService:
             booking = Booking(
                 project_id=self.project_config.project_id,
                 specialist_name=response.cosmetolog,
-                date=booking_date,
-                time=booking_time,
+                appointment_date=booking_date,
+                appointment_time=booking_time,
                 client_id=client_id,
                 client_name=response.name,
                 service_name=response.procedure,
-                phone=response.phone,
-                duration_slots=duration_slots,
+                client_phone=response.phone,
+                duration_minutes=duration_slots * 30,
                 status="active"
             )
             
@@ -211,8 +211,8 @@ class BookingService:
                     Booking.project_id == self.project_config.project_id,
                     Booking.client_id == client_id,
                     Booking.specialist_name == response.cosmetolog,
-                    Booking.date == booking_date,
-                    Booking.time == booking_time,
+                    Booking.appointment_date == booking_date,
+                    Booking.appointment_time == booking_time,
                     Booking.status == "active"
                 )
             ).first()
@@ -233,8 +233,8 @@ class BookingService:
                 logger.debug(f"Message ID: {message_id} - Clearing booking slot in Google Sheets for {booking.specialist_name}")
                 sheets_success = await self.sheets_service.clear_booking_slot_async(
                     booking.specialist_name, 
-                    booking.date, 
-                    booking.time
+                    booking.appointment_date, 
+                    booking.appointment_time
                 )
                 if sheets_success:
                     logger.debug(f"Message ID: {message_id} - Google Sheets slot cleared successfully")
@@ -315,17 +315,17 @@ class BookingService:
             
             # Store old booking details for clearing the old slot
             old_specialist = old_booking.specialist_name
-            old_date = old_booking.date
-            old_time = old_booking.time
+            old_date = old_booking.appointment_date
+            old_time = old_booking.appointment_time
             
             # Update the booking
             old_booking.specialist_name = response.cosmetolog
-            old_booking.date = new_date
-            old_booking.time = new_time
+            old_booking.appointment_date = new_date
+            old_booking.appointment_time = new_time
             old_booking.client_name = response.name or old_booking.client_name
             old_booking.service_name = response.procedure or old_booking.service_name
-            old_booking.phone = response.phone or old_booking.phone
-            old_booking.duration_slots = duration_slots
+            old_booking.client_phone = response.phone or old_booking.client_phone
+            old_booking.duration_minutes = duration_slots * 30
             old_booking.updated_at = datetime.utcnow()
             
             self.db.commit()
@@ -372,7 +372,7 @@ class BookingService:
             and_(
                 Booking.project_id == self.project_config.project_id,
                 Booking.specialist_name == specialist,
-                Booking.date == booking_date,
+                Booking.appointment_date == booking_date,
                 Booking.status == "active"
             )
         )
@@ -384,8 +384,9 @@ class BookingService:
         
         for booking in existing_bookings:
             # Check if any of the required slots conflict with existing bookings
-            for i in range(booking.duration_slots):
-                existing_slot = datetime.combine(booking_date, booking.time) + timedelta(minutes=30*i)
+            booking_duration_slots = booking.duration_minutes // 30
+            for i in range(booking_duration_slots):
+                existing_slot = datetime.combine(booking_date, booking.appointment_time) + timedelta(minutes=30*i)
                 if existing_slot.time() in occupied_slots:
                     return False
         
@@ -427,13 +428,13 @@ class BookingService:
                 id=booking.id,
                 project_id=booking.project_id,
                 specialist_name=booking.specialist_name,
-                date=booking.date,
-                time=booking.time,
+                date=booking.appointment_date,
+                time=booking.appointment_time,
                 client_id=booking.client_id,
                 client_name=booking.client_name,
                 service_name=booking.service_name,
-                phone=booking.phone,
-                duration_slots=booking.duration_slots,
+                phone=booking.client_phone,
+                duration_slots=booking.duration_minutes // 30,
                 status=booking.status,
                 created_at=booking.created_at,
                 updated_at=booking.updated_at
@@ -464,10 +465,7 @@ class BookingService:
             feedback = Feedback(
                 project_id=self.project_config.project_id,
                 client_id=client_id,
-                client_name=response.name,
-                phone=response.phone,
-                feedback_text=response.feedback,
-                feedback_date=datetime.utcnow()
+                comment=response.feedback
             )
             
             self.db.add(feedback)
