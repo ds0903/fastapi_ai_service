@@ -507,15 +507,24 @@ class ClaudeService:
     def _parse_intent_response(self, response: str, message_id: str) -> Dict[str, Any]:
         """Parse intent detection response"""
         try:
-            logger.debug(f"Message ID: {message_id} - Parsing intent response: {response[:200]}...")
+            logger.info(f"Message ID: {message_id} - RAW INTENT RESPONSE: '{response}'")
+            
             # Handle "json{...}" prefix that Claude sometimes adds
             clean_response = response.strip()
             if clean_response.startswith("json"):
                 clean_response = clean_response[4:].strip()
             
+            # Strip ```json ... ``` wrapper
+            if clean_response.startswith("```"):
+                import re
+                clean_response = re.sub(r"^```[a-zA-Z]*\s*", "", clean_response)
+                clean_response = re.sub(r"\s*```$", "", clean_response)
+            
+            logger.info(f"Message ID: {message_id} - CLEANED RESPONSE: '{clean_response}'")
+            
             result = json.loads(clean_response)
             parsed_result = {
-                "waiting": result.get("waiting"),
+                "waiting": result.get("waiting", 0 if result.get("date_order") or result.get("desire_time0") else 1),
                 "date_order": result.get("date_order"),
                 "desire_time0": result.get("desire_time0"),
                 "desire_time1": result.get("desire_time1")
@@ -524,7 +533,7 @@ class ClaudeService:
             return parsed_result
         except Exception as e:
             logger.error(f"Message ID: {message_id} - Failed to parse intent response JSON: {e}")
-            logger.warning(f"Message ID: {message_id} - Raw response was: '{response[:100]}...'")
+            logger.warning(f"Message ID: {message_id} - Raw response was: '{response[:300]}'")
             return {"waiting": 1}
     
     def _parse_service_response(self, response: str, message_id: str) -> Dict[str, Any]:
