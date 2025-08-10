@@ -219,7 +219,8 @@ async def sendpulse_webhook(
                 count=f"{error_count}",
                 gpt_response="Project configuration not found",
                 pic="",
-                status="500"
+                status="500",
+                user_message=message.response
             )
         
         # Ensure project exists in database (create if doesn't exist)
@@ -253,7 +254,8 @@ async def sendpulse_webhook(
                 count=f"{error_count}",
                 gpt_response=f"Error: {queue_result['error']}",
                 pic="",
-                status="500"
+                status="500",
+                user_message=message.response
             )
         
         # Check if this message should be skipped due to retry logic
@@ -264,7 +266,8 @@ async def sendpulse_webhook(
                 count="1",
                 gpt_response="Message skipped due to retry logic",
                 pic="",
-                status="200"
+                status="200",
+                user_message=message.response
             )
         
         # Process the message directly and wait for response
@@ -284,7 +287,8 @@ async def sendpulse_webhook(
                 count=f"{error_count}",
                 gpt_response="Произошла ошибка при обработке сообщения",
                 pic="",
-                status="200"
+                status="200",
+                user_message=message.response
             )
         
         # Check for processing errors in response_data
@@ -296,7 +300,8 @@ async def sendpulse_webhook(
                 count=f"{error_count}",
                 gpt_response=response_data.get("gpt_response", "Произошла ошибка при обработке сообщения"),
                 pic=response_data.get("pic", ""),
-                status="200"
+                status="200",
+                user_message=message.response
             )
         
         # CRITICAL: Check if this message was superseded during processing
@@ -311,7 +316,8 @@ async def sendpulse_webhook(
                 count=None,  # No errors, just superseded by newer message
                 gpt_response=response_data["gpt_response"],  # Still return the generated response
                 pic=response_data.get("pic", ""),
-                status="200"
+                status="200",
+                user_message=message.response
             )
         
         # Check if there are new messages in queue after processing
@@ -335,7 +341,8 @@ async def sendpulse_webhook(
             count=count,
             gpt_response=response_data["gpt_response"],
             pic=response_data.get("pic", ""),
-            status="200"
+            status="200",
+            user_message=message.response
         )
         
     except Exception as e:
@@ -346,7 +353,8 @@ async def sendpulse_webhook(
             count=f"{error_count}",
             gpt_response="Произошла ошибка при обработке сообщения",
             pic="",
-            status="500"
+            status="500",
+            user_message=message.response
         )
 
 
