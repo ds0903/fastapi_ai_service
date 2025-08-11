@@ -490,6 +490,7 @@ class MessageQueueService:
             
             # Use SELECT FOR UPDATE to lock all messages for this client
             # This prevents race conditions between concurrent processing completions
+            # CRITICAL: Include ALL statuses to find the truly latest message, even if it's already SUPERSEDED
             all_client_messages = self.db.query(MessageQueue).filter(
                 and_(
                     MessageQueue.project_id == project_id,
@@ -497,7 +498,8 @@ class MessageQueueService:
                     MessageQueue.status.in_([
                         MessageStatus.PENDING, 
                         MessageStatus.PROCESSING, 
-                        MessageStatus.COMPLETED
+                        MessageStatus.COMPLETED,
+                        MessageStatus.SUPERSEDED  # CRITICAL: Must include to find true latest
                     ])
                 )
             ).with_for_update().all()
@@ -519,7 +521,7 @@ class MessageQueueService:
                 else:
                     logger.info(f"Queue item {queue_item_id} is the latest message for client_id={client_id}, claiming winner status")
                 
-                # Mark all older messages as superseded
+                # Mark all older messages as superseded (but don't touch messages that are already superseded)
                 for msg in all_client_messages:
                     if msg.id != queue_item_id and msg.status in [MessageStatus.PENDING, MessageStatus.PROCESSING, MessageStatus.COMPLETED]:
                         msg.status = MessageStatus.SUPERSEDED
@@ -529,12 +531,19 @@ class MessageQueueService:
                         else:
                             logger.debug(f"Marked older message {msg.id} as superseded for client_id={client_id}")
                 
+                # Ensure current message is marked as COMPLETED (winner status)
+                if current_message.status != MessageStatus.COMPLETED:
+                    current_message.status = MessageStatus.COMPLETED
+                    current_message.updated_at = datetime.utcnow()
+                
                 self.db.commit()
                 return True
             else:
                 # This is not the latest message - it loses
-                current_message.status = MessageStatus.SUPERSEDED
-                current_message.updated_at = datetime.utcnow()
+                # Only mark as superseded if it's not already superseded
+                if current_message.status != MessageStatus.SUPERSEDED:
+                    current_message.status = MessageStatus.SUPERSEDED
+                    current_message.updated_at = datetime.utcnow()
                 
                 if message_id:
                     logger.info(f"Message ID: {message_id} - Queue item {queue_item_id} is NOT the latest message for client_id={client_id} (latest: {latest_message.id if latest_message else 'none'}), marking as superseded")
