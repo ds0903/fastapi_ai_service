@@ -1,5 +1,4 @@
 import redis
-import json
 import uuid
 import logging
 from datetime import datetime, timedelta
@@ -7,7 +6,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc
 
-from ..database import MessageQueue, ClientLastActivity, get_db
+from ..database import MessageQueue, ClientLastActivity
 from ..models import SendPulseMessage, MessageQueueItem, MessageStatus
 from ..config import settings
 
@@ -184,67 +183,79 @@ class MessageQueueService:
         - Mark previous pending/processing messages to return FALSE
         - Create/update queue item for current message  
         - Return coordination instructions
+        
+        Uses database row-level locking to prevent race conditions between concurrent webhook requests.
         """
         client_id = message.tg_id
         
-        # Get all pending and processing messages for this client
-        existing_messages = self.db.query(MessageQueue).filter(
-            and_(
-                MessageQueue.project_id == message.project_id,
-                MessageQueue.client_id == client_id,
-                MessageQueue.status.in_([MessageStatus.PENDING, MessageStatus.PROCESSING])
+        # Start a transaction with proper isolation to prevent race conditions
+        try:
+            # Use SELECT FOR UPDATE to lock existing messages for this client
+            # This prevents other concurrent webhook requests from interfering
+            logger.debug(f"Message ID: {message_id} - Acquiring locks for client_id={client_id} message coordination")
+            
+            existing_messages = self.db.query(MessageQueue).filter(
+                and_(
+                    MessageQueue.project_id == message.project_id,
+                    MessageQueue.client_id == client_id,
+                    MessageQueue.status.in_([MessageStatus.PENDING, MessageStatus.PROCESSING])
+                )
+            ).with_for_update().all()
+            
+            logger.debug(f"Message ID: {message_id} - Found {len(existing_messages)} existing messages for client_id={client_id}")
+            
+            # If there are existing messages, mark them to return FALSE
+            if existing_messages:
+                logger.info(f"Message ID: {message_id} - Marking {len(existing_messages)} existing messages to return FALSE for client_id={client_id}")
+                
+                # Collect all message text for aggregation
+                all_messages = []
+                for msg in existing_messages:
+                    all_messages.append(msg.aggregated_message)
+                    # Mark existing messages as superseded (they should return FALSE)
+                    msg.status = MessageStatus.SUPERSEDED
+                    msg.updated_at = datetime.utcnow()
+                    logger.debug(f"Message ID: {message_id} - Marked message {msg.id} as superseded for client_id={client_id}")
+                
+                # Add current message to aggregation
+                all_messages.append(message.response)
+                aggregated_text = " ".join(all_messages)
+                
+                logger.info(f"Message ID: {message_id} - Aggregating {len(all_messages)} messages for client_id={client_id}: '{aggregated_text[:100]}...'")
+            else:
+                logger.debug(f"Message ID: {message_id} - No existing messages for client_id={client_id}, processing normally")
+                aggregated_text = message.response
+            
+            # Create new queue item for current message
+            queue_item_id = str(uuid.uuid4())
+            logger.debug(f"Message ID: {message_id} - Creating new queue item {queue_item_id} for client_id={client_id}")
+            queue_item = MessageQueue(
+                id=queue_item_id,
+                project_id=message.project_id,
+                client_id=client_id,
+                original_message=message.response,
+                aggregated_message=aggregated_text,
+                status=MessageStatus.PENDING,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
             )
-        ).all()
-        
-        logger.debug(f"Message ID: {message_id} - Found {len(existing_messages)} existing messages for client_id={client_id}")
-        
-        # If there are existing messages, mark them to return FALSE
-        if existing_messages:
-            logger.info(f"Message ID: {message_id} - Marking {len(existing_messages)} existing messages to return FALSE for client_id={client_id}")
             
-            # Collect all message text for aggregation
-            all_messages = []
-            for msg in existing_messages:
-                all_messages.append(msg.aggregated_message)
-                # Mark existing messages as superseded (they should return FALSE)
-                msg.status = MessageStatus.SUPERSEDED  # We'll add this status
-                msg.updated_at = datetime.utcnow()
-                logger.debug(f"Message ID: {message_id} - Marked message {msg.id} as superseded for client_id={client_id}")
+            self.db.add(queue_item)
+            self.db.commit()
+            self.db.refresh(queue_item)
             
-            # Add current message to aggregation
-            all_messages.append(message.response)
-            aggregated_text = " ".join(all_messages)
+            logger.info(f"Message ID: {message_id} - Queue item {queue_item_id} created successfully for client_id={client_id}")
             
-            logger.info(f"Message ID: {message_id} - Aggregating {len(all_messages)} messages for client_id={client_id}: '{aggregated_text[:100]}...'")
-        else:
-            logger.debug(f"Message ID: {message_id} - No existing messages for client_id={client_id}, processing normally")
-            aggregated_text = message.response
-        
-        # Create new queue item for current message
-        queue_item_id = str(uuid.uuid4())
-        logger.debug(f"Message ID: {message_id} - Creating new queue item {queue_item_id} for client_id={client_id}")
-        queue_item = MessageQueue(
-            id=queue_item_id,
-            project_id=message.project_id,
-            client_id=client_id,
-            original_message=message.response,
-            aggregated_message=aggregated_text,
-            status=MessageStatus.PENDING,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        
-        self.db.add(queue_item)
-        self.db.commit()
-        self.db.refresh(queue_item)
-        
-        logger.info(f"Message ID: {message_id} - Queue item {queue_item_id} created successfully for client_id={client_id}")
-        
-        return {
-            "queue_item": queue_item,
-            "queue_item_id": queue_item_id,
-            "should_return_false": False  # Current message should be processed
-        }
+            return {
+                "queue_item": queue_item,
+                "queue_item_id": queue_item_id,
+                "should_return_false": False  # Current message should be processed
+            }
+            
+        except Exception as e:
+            logger.error(f"Message ID: {message_id} - Error in message coordination for client_id={client_id}: {e}")
+            self.db.rollback()
+            raise
     
     def get_message_for_processing(self, project_id: str, client_id: str, message_id: str = None) -> Optional[MessageQueueItem]:
         """Get the latest pending message for a client"""
@@ -449,6 +460,98 @@ class MessageQueueService:
         else:
             logger.debug(f"Queue item {queue_item_id} superseded status: {is_superseded}")
         return is_superseded
+    
+    def try_claim_as_winner(self, project_id: str, client_id: str, queue_item_id: str, message_id: str = None) -> bool:
+        """
+        Atomically try to claim this message as the "winner" that should return send_status=TRUE.
+        
+        This method ensures that exactly one message per client gets send_status=TRUE by:
+        1. Using database locks to prevent race conditions
+        2. Checking for newer messages atomically
+        3. Marking older messages as superseded if this wins
+        
+        Returns True if this message won and should return send_status=TRUE
+        Returns False if this message was superseded and should return send_status=FALSE
+        """
+        if message_id:
+            logger.debug(f"Message ID: {message_id} - Trying to claim winner status for queue_item {queue_item_id}, client_id={client_id}")
+        else:
+            logger.debug(f"Trying to claim winner status for queue_item {queue_item_id}, client_id={client_id}")
+        
+        try:
+            # Get the current message first
+            current_message = self.db.query(MessageQueue).filter(MessageQueue.id == queue_item_id).first()
+            if not current_message:
+                if message_id:
+                    logger.warning(f"Message ID: {message_id} - Queue item {queue_item_id} not found during winner claim")
+                else:
+                    logger.warning(f"Queue item {queue_item_id} not found during winner claim")
+                return False
+            
+            # Use SELECT FOR UPDATE to lock all messages for this client
+            # This prevents race conditions between concurrent processing completions
+            all_client_messages = self.db.query(MessageQueue).filter(
+                and_(
+                    MessageQueue.project_id == project_id,
+                    MessageQueue.client_id == client_id,
+                    MessageQueue.status.in_([
+                        MessageStatus.PENDING, 
+                        MessageStatus.PROCESSING, 
+                        MessageStatus.COMPLETED
+                    ])
+                )
+            ).with_for_update().all()
+            
+            # Find the latest message by creation time
+            latest_message = None
+            latest_time = None
+            
+            for msg in all_client_messages:
+                if latest_time is None or msg.created_at > latest_time:
+                    latest_time = msg.created_at
+                    latest_message = msg
+            
+            # Check if current message is the latest
+            if latest_message and latest_message.id == queue_item_id:
+                # This is the latest message - it wins!
+                if message_id:
+                    logger.info(f"Message ID: {message_id} - Queue item {queue_item_id} is the latest message for client_id={client_id}, claiming winner status")
+                else:
+                    logger.info(f"Queue item {queue_item_id} is the latest message for client_id={client_id}, claiming winner status")
+                
+                # Mark all older messages as superseded
+                for msg in all_client_messages:
+                    if msg.id != queue_item_id and msg.status in [MessageStatus.PENDING, MessageStatus.PROCESSING, MessageStatus.COMPLETED]:
+                        msg.status = MessageStatus.SUPERSEDED
+                        msg.updated_at = datetime.utcnow()
+                        if message_id:
+                            logger.debug(f"Message ID: {message_id} - Marked older message {msg.id} as superseded for client_id={client_id}")
+                        else:
+                            logger.debug(f"Marked older message {msg.id} as superseded for client_id={client_id}")
+                
+                self.db.commit()
+                return True
+            else:
+                # This is not the latest message - it loses
+                current_message.status = MessageStatus.SUPERSEDED
+                current_message.updated_at = datetime.utcnow()
+                
+                if message_id:
+                    logger.info(f"Message ID: {message_id} - Queue item {queue_item_id} is NOT the latest message for client_id={client_id} (latest: {latest_message.id if latest_message else 'none'}), marking as superseded")
+                else:
+                    logger.info(f"Queue item {queue_item_id} is NOT the latest message for client_id={client_id} (latest: {latest_message.id if latest_message else 'none'}), marking as superseded")
+                
+                self.db.commit()
+                return False
+                
+        except Exception as e:
+            if message_id:
+                logger.error(f"Message ID: {message_id} - Error in winner claim for queue_item {queue_item_id}: {e}")
+            else:
+                logger.error(f"Error in winner claim for queue_item {queue_item_id}: {e}")
+            self.db.rollback()
+            # On error, assume not winner to be safe
+            return False
     
     def get_queue_stats(self, project_id: str) -> Dict[str, int]:
         """Get queue statistics for a project"""

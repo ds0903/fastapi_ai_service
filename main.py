@@ -354,36 +354,27 @@ async def sendpulse_webhook(
                 user_message=message.response
             )
         
-        # CRITICAL: Check if this message was superseded during processing
+        # CRITICAL: Use atomic winner claiming to determine send_status
+        # This prevents race conditions where multiple messages get TRUE or no messages get TRUE
         queue_service = MessageQueueService(db)
-        message_was_superseded = queue_service.check_if_message_superseded(queue_result["queue_item_id"], message_id)
+        is_winner = queue_service.try_claim_as_winner(
+            message.project_id, 
+            client_id, 
+            queue_result["queue_item_id"], 
+            message_id
+        )
         
-        if message_was_superseded:
-            # This message was superseded by a newer message during processing
-            logger.info(f"Message ID: {message_id} - Message {queue_result['queue_item_id']} was superseded during processing for client_id={client_id}, returning send_status=FALSE")
-            return WebhookResponse(
-                send_status="FALSE",
-                count=None,  # No errors, just superseded by newer message
-                gpt_response=response_data["gpt_response"],  # Still return the generated response
-                pic=response_data.get("pic", ""),
-                status="200",
-                user_message=message.response
-            )
-        
-        # Check if there are new messages in queue after processing
-        has_new_messages = queue_service.has_pending_messages(message.project_id, client_id, message_id)
-        
-        # Determine send_status and count based on errors and new messages
-        if has_new_messages:
-            # No errors but new messages arrived during processing
-            send_status = "FALSE"
-            count = None  # No errors, just new messages
-            logger.info(f"Message ID: {message_id} - New messages found in queue for client_id={client_id}, returning send_status=FALSE, count=None")
-        else:
-            # No errors and no new messages - successful completion
+        # Determine send_status and count based on winner status
+        if is_winner:
+            # This message won - it's the latest and should return TRUE
             send_status = "TRUE"
             count = "0"  # Successful completion, no errors
-            logger.info(f"Message ID: {message_id} - No new messages in queue for client_id={client_id}, returning send_status=TRUE, count=0")
+            logger.info(f"Message ID: {message_id} - Message {queue_result['queue_item_id']} won winner claim for client_id={client_id}, returning send_status=TRUE, count=0")
+        else:
+            # This message was superseded by a newer message
+            send_status = "FALSE"
+            count = None  # No errors, just superseded by newer message
+            logger.info(f"Message ID: {message_id} - Message {queue_result['queue_item_id']} lost winner claim for client_id={client_id}, returning send_status=FALSE, count=None")
         
         # Return the final response
         return WebhookResponse(
