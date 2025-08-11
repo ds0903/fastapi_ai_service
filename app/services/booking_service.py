@@ -45,10 +45,6 @@ class BookingService:
                 logger.debug(f"Message ID: {message_id} - No booking action required for client_id={client_id}")
                 result = {"success": True, "message": "No booking action required", "action": "none"}
             
-            # Save feedback if provided
-            if claude_response.feedback:
-                logger.info(f"Message ID: {message_id} - Saving client feedback for client_id={client_id}")
-                await self._save_feedback(claude_response, client_id, message_id)
             
             logger.info(f"Message ID: {message_id} - Booking action completed for client_id={client_id}: {result['action']} - success={result['success']}")
             return result

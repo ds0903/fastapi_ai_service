@@ -645,6 +645,17 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             else:
                 logger.debug(f"Message ID: {message_id} - No booking action required for client_id={client_id}")
             
+            # Process feedback separately (even if there's no booking action)
+            if main_response.feedback:
+                logger.info(f"Message ID: {message_id} - Processing client feedback for client_id={client_id}")
+                try:
+                    await booking_service._save_feedback(main_response, client_id, message_id)
+                    logger.info(f"Message ID: {message_id} - Feedback processed successfully for client_id={client_id}")
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"Message ID: {message_id} - Error processing feedback for client_id={client_id}: {e}")
+                    # Continue anyway - feedback errors shouldn't break the main flow
+            
             # Save dialogue entry
             logger.debug(f"Message ID: {message_id} - Saving dialogue entries for client_id={client_id}")
             try:
