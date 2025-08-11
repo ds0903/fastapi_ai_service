@@ -1,14 +1,14 @@
 import gspread
 from google.oauth2.service_account import Credentials
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from datetime import datetime, date, time, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import and_
 import asyncio
 import logging
 
 from ..config import settings, ProjectConfig
-from ..models import BookingRecord, AvailableSlots
+from ..models import AvailableSlots
 from ..database import Booking
 
 logger = logging.getLogger(__name__)
@@ -536,22 +536,23 @@ class GoogleSheetsService:
         self, 
         specialist_name: str, 
         booking_date: date, 
-        booking_time: time
+        booking_time: time,
+        duration_slots: int = 1
     ) -> bool:
         """Async wrapper for clear_booking_slot"""
         try:
-            return await asyncio.to_thread(self.clear_booking_slot, specialist_name, booking_date, booking_time)
+            return await asyncio.to_thread(self.clear_booking_slot, specialist_name, booking_date, booking_time, duration_slots)
         except Exception as e:
             logger.error(f"Error in async clear_booking_slot: {e}", exc_info=True)
             return False
 
-    def clear_booking_slot(self, specialist_name: str, booking_date: date, booking_time: time) -> bool:
+    def clear_booking_slot(self, specialist_name: str, booking_date: date, booking_time: time, duration_slots: int = 1) -> bool:
         """Clear a specific booking slot (for cancellations)"""
         if not self.spreadsheet:
             logger.warning("Cannot clear booking slot: no spreadsheet connection")
             return False
         
-        logger.info(f"Clearing booking slot for {specialist_name}: {booking_date} {booking_time}")
+        logger.info(f"Clearing booking slot for {specialist_name}: {booking_date} {booking_time} (duration: {duration_slots} slots)")
         
         try:
             # Get worksheet for specialist
@@ -565,14 +566,24 @@ class GoogleSheetsService:
             target_row = self._find_row_for_time_slot(worksheet, booking_date, booking_time)
             
             if target_row:
-                # Clear booking data columns (D, E, F)
+                # Clear booking data columns (D, E, F) for all slots
                 empty_data = ["", "", ""]  # Empty client_id, name, service
                 
-                # Update only columns D, E, F for this specific row
+                # Clear the main slot
                 range_update = f'D{target_row}:F{target_row}'
                 worksheet.update(range_update, [empty_data])
+                logger.debug(f"Cleared main booking slot at row {target_row}")
                 
-                logger.info(f"Successfully cleared booking slot at row {target_row} for {specialist_name}")
+                # If this is a multi-slot booking, clear additional slots
+                if duration_slots > 1:
+                    logger.info(f"Clearing additional {duration_slots - 1} slots for multi-slot booking")
+                    for i in range(1, duration_slots):
+                        additional_row = target_row + i
+                        additional_range = f'D{additional_row}:F{additional_row}'
+                        worksheet.update(additional_range, [empty_data])
+                        logger.debug(f"  Cleared additional slot at row {additional_row}")
+                
+                logger.info(f"Successfully cleared booking slot(s) starting at row {target_row} for {specialist_name} ({duration_slots} slots total)")
                 return True
             else:
                 logger.error(f"Could not find row for time slot {booking_time} on {booking_date}")

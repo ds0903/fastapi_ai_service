@@ -1,11 +1,11 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime, date, time, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import and_
 import logging
 
 from ..database import Booking, Feedback
-from ..models import ClaudeMainResponse, BookingRecord, FeedbackRecord
+from ..models import ClaudeMainResponse, BookingRecord
 from ..config import ProjectConfig
 from ..services.google_sheets import GoogleSheetsService
 
@@ -228,13 +228,15 @@ class BookingService:
             booking.updated_at = datetime.utcnow()
             self.db.commit()
             
-            # Clear the specific booking slot in Google Sheets
+            # Clear the specific booking slot in Google Sheets (with proper duration for multi-slot bookings)
             try:
-                logger.debug(f"Message ID: {message_id} - Clearing booking slot in Google Sheets for {booking.specialist_name}")
+                duration_slots = booking.duration_minutes // 30
+                logger.debug(f"Message ID: {message_id} - Clearing booking slot in Google Sheets for {booking.specialist_name} ({duration_slots} slots)")
                 sheets_success = await self.sheets_service.clear_booking_slot_async(
                     booking.specialist_name, 
                     booking.appointment_date, 
-                    booking.appointment_time
+                    booking.appointment_time,
+                    duration_slots
                 )
                 if sheets_success:
                     logger.debug(f"Message ID: {message_id} - Google Sheets slot cleared successfully")
@@ -274,8 +276,34 @@ class BookingService:
                     "message": "Активная запись не найдена"
                 }
             
-            # For simplicity, change the most recent booking
-            old_booking = sorted(old_bookings, key=lambda x: x.created_at, reverse=True)[0]
+            # Find the booking that matches the service being changed
+            old_booking = None
+            
+            # First, try to find by service name if provided
+            if response.procedure:
+                matching_bookings = [b for b in old_bookings if response.procedure.lower() in b.service_name.lower()]
+                if matching_bookings:
+                    old_booking = sorted(matching_bookings, key=lambda x: x.created_at, reverse=True)[0]
+                    logger.info(f"Message ID: {message_id} - Found booking by service match: {old_booking.service_name}")
+            
+            # If no service match found, try to find by date/time if provided in reject fields
+            if not old_booking and response.date_reject and response.time_reject:
+                try:
+                    reject_date = self._parse_date(response.date_reject)
+                    reject_time = self._parse_time(response.time_reject)
+                    if reject_date and reject_time:
+                        date_time_bookings = [b for b in old_bookings 
+                                            if b.appointment_date == reject_date and b.appointment_time == reject_time]
+                        if date_time_bookings:
+                            old_booking = date_time_bookings[0]
+                            logger.info(f"Message ID: {message_id} - Found booking by date/time match: {old_booking.appointment_date} {old_booking.appointment_time}")
+                except Exception as e:
+                    logger.warning(f"Message ID: {message_id} - Error parsing reject date/time: {e}")
+            
+            # Fallback to most recent booking if no specific match found
+            if not old_booking:
+                old_booking = sorted(old_bookings, key=lambda x: x.created_at, reverse=True)[0]
+                logger.warning(f"Message ID: {message_id} - No specific booking match found, using most recent: {old_booking.service_name}")
             
             # Validate new booking data
             if not all([response.cosmetolog, response.time_set_up, response.date_order]):
@@ -317,6 +345,7 @@ class BookingService:
             old_specialist = old_booking.specialist_name
             old_date = old_booking.appointment_date
             old_time = old_booking.appointment_time
+            old_duration_slots = old_booking.duration_minutes // 30  # Calculate slots from duration
             
             # Update the booking
             old_booking.specialist_name = response.cosmetolog
@@ -332,9 +361,9 @@ class BookingService:
             
             # Update Google Sheets - clear old slot and add new slot
             try:
-                # Clear the old booking slot
-                logger.debug(f"Message ID: {message_id} - Clearing old booking slot: {old_specialist} {old_date} {old_time}")
-                await self.sheets_service.clear_booking_slot_async(old_specialist, old_date, old_time)
+                # Clear the old booking slot (with proper duration for multi-slot bookings)
+                logger.debug(f"Message ID: {message_id} - Clearing old booking slot: {old_specialist} {old_date} {old_time} ({old_duration_slots} slots)")
+                await self.sheets_service.clear_booking_slot_async(old_specialist, old_date, old_time, old_duration_slots)
                 
                 # Add the new booking slot
                 logger.debug(f"Message ID: {message_id} - Adding new booking slot: {old_booking.specialist_name} {new_date} {new_time}")
@@ -403,14 +432,14 @@ class BookingService:
                 current_year = datetime.now().year
                 return datetime.strptime(f"{date_str}.{current_year}", "%d.%m.%Y").date()
             return None
-        except:
+        except Exception:
             return None
     
     def _parse_time(self, time_str: str) -> Optional[time]:
         """Parse time string in HH:MM format"""
         try:
             return datetime.strptime(time_str, "%H:%M").time()
-        except:
+        except Exception:
             return None
     
     def get_client_bookings(self, client_id: str) -> List[BookingRecord]:

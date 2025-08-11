@@ -314,7 +314,7 @@ async def sendpulse_webhook(
             return WebhookResponse(
                 send_status="FALSE",
                 count="1",
-                gpt_response="Message skipped due to retry logic",
+                gpt_response="",  # Empty response for skipped messages to prevent delivery
                 pic="",
                 status="200",
                 user_message=message.response
@@ -335,7 +335,7 @@ async def sendpulse_webhook(
             return WebhookResponse(
                 send_status="FALSE",
                 count=f"{error_count}",
-                gpt_response="Произошла ошибка при обработке сообщения",
+                gpt_response="",  # Empty response for errors to prevent delivery
                 pic="",
                 status="200",
                 user_message=message.response
@@ -348,8 +348,8 @@ async def sendpulse_webhook(
             return WebhookResponse(
                 send_status="FALSE",
                 count=f"{error_count}",
-                gpt_response=response_data.get("gpt_response", "Произошла ошибка при обработке сообщения"),
-                pic=response_data.get("pic", ""),
+                gpt_response="",  # Empty response for errors to prevent delivery
+                pic="",
                 status="200",
                 user_message=message.response
             )
@@ -369,19 +369,23 @@ async def sendpulse_webhook(
             # This message won - it's the latest and should return TRUE
             send_status = "TRUE"
             count = "0"  # Successful completion, no errors
+            final_gpt_response = response_data["gpt_response"]  # Send the actual AI response
+            final_pic = response_data.get("pic", "")
             logger.info(f"Message ID: {message_id} - Message {queue_result['queue_item_id']} won winner claim for client_id={client_id}, returning send_status=TRUE, count=0")
         else:
-            # This message was superseded by a newer message
+            # This message was superseded by a newer message - don't send AI response to user
             send_status = "FALSE"
             count = None  # No errors, just superseded by newer message
+            final_gpt_response = ""  # CRITICAL: Empty response for FALSE status to prevent duplicate delivery
+            final_pic = ""  # No picture for superseded messages
             logger.info(f"Message ID: {message_id} - Message {queue_result['queue_item_id']} lost winner claim for client_id={client_id}, returning send_status=FALSE, count=None")
         
         # Return the final response
         return WebhookResponse(
             send_status=send_status,
             count=count,
-            gpt_response=response_data["gpt_response"],
-            pic=response_data.get("pic", ""),
+            gpt_response=final_gpt_response,
+            pic=final_pic,
             status="200",
             user_message=message.response
         )
@@ -392,7 +396,7 @@ async def sendpulse_webhook(
         return WebhookResponse(
             send_status="FALSE",
             count=f"{error_count}",
-            gpt_response="Произошла ошибка при обработке сообщения",
+            gpt_response="",  # Empty response for errors to prevent delivery
             pic="",
             status="500",
             user_message=message.response
