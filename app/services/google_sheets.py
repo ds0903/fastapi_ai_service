@@ -678,6 +678,76 @@ class GoogleSheetsService:
             logger.error(f"Error checking slot availability in sheets: {e}", exc_info=True)
             return False  # Assume not available on error to be safe
 
+    async def save_feedback_to_sheets_async(
+        self, 
+        client_id: str, 
+        client_name: str, 
+        client_phone: str, 
+        feedback_text: str
+    ) -> bool:
+        """Async wrapper for save_feedback_to_sheets"""
+        try:
+            return await asyncio.to_thread(
+                self.save_feedback_to_sheets, 
+                client_id, client_name, client_phone, feedback_text
+            )
+        except Exception as e:
+            logger.error(f"Error in async save_feedback_to_sheets: {e}", exc_info=True)
+            return False
+
+    def save_feedback_to_sheets(
+        self, 
+        client_id: str, 
+        client_name: str, 
+        client_phone: str, 
+        feedback_text: str
+    ) -> bool:
+        """Save feedback to 'Хран' sheet with columns: A=client_id, B=client_name, C=client_phone, D=date_time, E=feedback"""
+        if not self.spreadsheet:
+            logger.warning("Cannot save feedback: no spreadsheet connection")
+            return False
+        
+        logger.info(f"Saving feedback to 'Хран' sheet for client_id={client_id}")
+        
+        try:
+            # Get or create the feedback sheet
+            try:
+                feedback_sheet = self.spreadsheet.worksheet("Хран")
+                logger.debug("Found existing 'Хран' worksheet")
+            except gspread.WorksheetNotFound:
+                logger.info("'Хран' worksheet not found, creating new one")
+                feedback_sheet = self.spreadsheet.add_worksheet(title="Хран", rows=1000, cols=5)
+                # Add headers
+                headers = ["Client ID", "Client Name", "Client Phone", "Date & Time", "Feedback"]
+                feedback_sheet.update('A1:E1', [headers])
+                logger.info("Created 'Хран' worksheet with headers")
+            
+            # Prepare feedback data
+            current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
+            feedback_row = [
+                client_id or "",           # A: Client ID
+                client_name or "",         # B: Client Name  
+                client_phone or "",        # C: Client Phone
+                current_datetime,          # D: Date & Time
+                feedback_text or ""        # E: Feedback
+            ]
+            
+            # Find the next empty row
+            all_values = feedback_sheet.get_all_values()
+            next_row = len(all_values) + 1
+            
+            # Append the feedback
+            range_to_update = f'A{next_row}:E{next_row}'
+            feedback_sheet.update(range_to_update, [feedback_row])
+            
+            logger.info(f"Successfully saved feedback to 'Хран' sheet at row {next_row}")
+            logger.debug(f"Feedback data: {feedback_row}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving feedback to 'Хран' sheet: {e}", exc_info=True)
+            return False
+
     def _find_row_for_time_slot(self, worksheet, target_date: date, target_time: time) -> Optional[int]:
         """Find the row number for a specific date and time slot"""
         try:

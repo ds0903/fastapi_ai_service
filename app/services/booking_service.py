@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime, date, time, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, desc
 import logging
 
 from ..database import Booking, Feedback
@@ -48,7 +48,7 @@ class BookingService:
             # Save feedback if provided
             if claude_response.feedback:
                 logger.info(f"Message ID: {message_id} - Saving client feedback for client_id={client_id}")
-                self._save_feedback(claude_response, client_id, message_id)
+                await self._save_feedback(claude_response, client_id, message_id)
             
             logger.info(f"Message ID: {message_id} - Booking action completed for client_id={client_id}: {result['action']} - success={result['success']}")
             return result
@@ -491,10 +491,12 @@ class BookingService:
         
         return "\n".join(booking_strings)
     
-    def _save_feedback(self, response: ClaudeMainResponse, client_id: str, message_id: str) -> None:
-        """Save client feedback"""
+    async def _save_feedback(self, response: ClaudeMainResponse, client_id: str, message_id: str) -> None:
+        """Save client feedback to database and Google Sheets"""
         try:
             logger.debug(f"Message ID: {message_id} - Creating feedback record for client_id={client_id}")
+            
+            # Save to database
             feedback = Feedback(
                 project_id=self.project_config.project_id,
                 client_id=client_id,
@@ -503,7 +505,46 @@ class BookingService:
             
             self.db.add(feedback)
             self.db.commit()
-            logger.info(f"Message ID: {message_id} - Feedback saved successfully for client_id={client_id}")
+            logger.info(f"Message ID: {message_id} - Feedback saved to database for client_id={client_id}")
+            
+            # Save to Google Sheets "Хран" sheet
+            try:
+                # Get client information from response or existing bookings
+                client_name = response.name or ""
+                client_phone = response.phone or ""
+                
+                # If no name/phone in response, try to get from recent bookings
+                if not client_name or not client_phone:
+                    recent_bookings = self.db.query(Booking).filter(
+                        and_(
+                            Booking.project_id == self.project_config.project_id,
+                            Booking.client_id == client_id
+                        )
+                    ).order_by(desc(Booking.created_at)).limit(1).all()
+                    
+                    if recent_bookings:
+                        recent_booking = recent_bookings[0]
+                        if not client_name and recent_booking.client_name:
+                            client_name = recent_booking.client_name
+                        if not client_phone and recent_booking.client_phone:
+                            client_phone = recent_booking.client_phone
+                
+                logger.debug(f"Message ID: {message_id} - Saving feedback to 'Хран' sheet with name='{client_name}', phone='{client_phone}'")
+                sheets_success = await self.sheets_service.save_feedback_to_sheets_async(
+                    client_id=client_id,
+                    client_name=client_name,
+                    client_phone=client_phone,
+                    feedback_text=response.feedback
+                )
+                
+                if sheets_success:
+                    logger.info(f"Message ID: {message_id} - Feedback saved to Google Sheets successfully for client_id={client_id}")
+                else:
+                    logger.warning(f"Message ID: {message_id} - Failed to save feedback to Google Sheets for client_id={client_id}")
+                    
+            except Exception as sheets_error:
+                logger.error(f"Message ID: {message_id} - Error saving feedback to Google Sheets for client_id={client_id}: {sheets_error}")
+                # Don't fail the entire feedback save if sheets fails
             
         except Exception as e:
             logger.error(f"Message ID: {message_id} - Error saving feedback for client_id={client_id}: {e}")
