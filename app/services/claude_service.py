@@ -461,7 +461,7 @@ class ClaudeService:
             import re
             pattern = r'СЛОВАРЬ УСЛУГ:\s*\{[^}]*(?:\{[^}]*\}[^}]*)*\}'
             base_prompt = re.sub(pattern, f'СЛОВАРЬ УСЛУГ:\n{services_dict}', base_prompt, flags=re.DOTALL)
-            logger.debug(f"Replaced hardcoded services with project-specific services in service identification prompt")
+            logger.debug("Replaced hardcoded services with project-specific services in service identification prompt")
         
         return f"""
         {base_prompt}
@@ -562,10 +562,17 @@ class ClaudeService:
         try:
             logger.debug(f"Message ID: {message_id} - Parsing service response: {response[:200]}...")
             # Handle "json{...}" prefix that Claude sometimes adds
+            import re
             clean_response = response.strip()
             if clean_response.startswith("json"):
                 clean_response = clean_response[4:].strip()
             
+            # Strip ```json ... ``` wrapper
+            if clean_response.startswith("```"):
+                clean_response = re.sub(r"^```[a-zA-Z]*\s*", "", clean_response)
+                clean_response = re.sub(r"\s*```$", "", clean_response)
+            
+            logger.debug(f"Message ID: {message_id} - Cleaned service response for JSON parsing: {clean_response[:200]}...")
             result = json.loads(clean_response)
             parsed_result = {
                 "time_fraction": result.get("time_fractions", result.get("time_fraction", 1)),
@@ -588,9 +595,15 @@ class ClaudeService:
             if clean_response.startswith("json"):
                 clean_response = clean_response[4:].strip()
             
+            # Strip ```json ... ``` wrapper
+            if clean_response.startswith("```"):
+                clean_response = re.sub(r"^```[a-zA-Z]*\s*", "", clean_response)
+                clean_response = re.sub(r"\s*```$", "", clean_response)
+            
             # Remove control characters that can break JSON parsing
             clean_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', clean_response)
             
+            logger.debug(f"Message ID: {message_id} - Cleaned response for JSON parsing: {clean_response[:200]}...")
             result = json.loads(clean_response)
             parsed_result = {
                 "gpt_response": result.get("client_response", result.get("gpt_response", "")),
