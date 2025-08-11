@@ -622,9 +622,10 @@ class GoogleSheetsService:
             # Get worksheet for specialist
             try:
                 worksheet = self.spreadsheet.worksheet(specialist_name)
+                logger.debug(f"Successfully found worksheet for specialist: {specialist_name}")
             except gspread.WorksheetNotFound:
-                logger.debug(f"Worksheet not found for specialist {specialist_name}, slot is available")
-                return True  # If no worksheet exists, slot is available
+                logger.warning(f"Worksheet not found for specialist {specialist_name}, returning unavailable")
+                return False  # CHANGED: If no worksheet exists, slot should be unavailable, not available
             
             # Find the correct row for this time slot
             target_row = self._find_row_for_time_slot(worksheet, booking_date, booking_time)
@@ -632,20 +633,33 @@ class GoogleSheetsService:
             if target_row:
                 # Check if ALL booking columns (D, E, F, G) are empty
                 # Any text in any of these columns means the slot is unavailable
+                logger.debug(f"Checking row {target_row} for booking data...")
                 client_id_cell = worksheet.cell(target_row, 4).value  # Column D
                 client_name_cell = worksheet.cell(target_row, 5).value  # Column E
                 service_cell = worksheet.cell(target_row, 6).value  # Column F
                 phone_cell = worksheet.cell(target_row, 7).value  # Column G
                 
-                # Check if any cell has content (any non-empty text)
+                logger.debug(f"Cell values: D='{client_id_cell}', E='{client_name_cell}', F='{service_cell}', G='{phone_cell}'")
+                
+                # Check if any cell has content (any non-empty text or numbers)
                 cells_with_content = []
-                if client_id_cell and str(client_id_cell).strip():
+                
+                def has_content(cell_value):
+                    """Check if cell has any meaningful content"""
+                    if cell_value is None:
+                        return False
+                    # Convert to string and strip whitespace
+                    str_value = str(cell_value).strip()
+                    # Check if not empty and not just whitespace
+                    return len(str_value) > 0
+                
+                if has_content(client_id_cell):
                     cells_with_content.append(f"D:'{client_id_cell}'")
-                if client_name_cell and str(client_name_cell).strip():
+                if has_content(client_name_cell):
                     cells_with_content.append(f"E:'{client_name_cell}'")
-                if service_cell and str(service_cell).strip():
+                if has_content(service_cell):
                     cells_with_content.append(f"F:'{service_cell}'")
-                if phone_cell and str(phone_cell).strip():
+                if has_content(phone_cell):
                     cells_with_content.append(f"G:'{phone_cell}'")
                 
                 is_available = len(cells_with_content) == 0

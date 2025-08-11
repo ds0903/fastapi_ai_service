@@ -132,8 +132,12 @@ class BookingService:
                         "message": "Выбранное время уже занято"
                     }
             except Exception as sheets_check_error:
-                logger.warning(f"Message ID: {message_id} - Could not verify slot availability in Google Sheets: {sheets_check_error}")
-                # Continue with booking if sheets check fails
+                logger.error(f"Message ID: {message_id} - Could not verify slot availability in Google Sheets: {sheets_check_error}")
+                # CRITICAL: Do not allow booking if we can't verify sheets availability
+                return {
+                    "success": False,
+                    "message": "Временная техническая ошибка. Попробуйте позже"
+                }
             
             # Create booking
             end_time = datetime.combine(booking_date, booking_time) + timedelta(minutes=30 * duration_slots)
