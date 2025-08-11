@@ -500,15 +500,16 @@ class GoogleSheetsService:
             target_row = self._find_row_for_time_slot(worksheet, booking.appointment_date, booking.appointment_time)
             
             if target_row:
-                # Update only the booking data columns (D, E, F)
+                # Update only the booking data columns (D, E, F, G)
                 booking_data = [
                     booking.client_id or "",           # D
                     booking.client_name or "",         # E
-                    booking.service_name or ""         # F
+                    booking.service_name or "",        # F
+                    booking.client_phone or ""         # G
                 ]
                 
-                # Update only columns D, E, F for this specific row
-                range_update = f'D{target_row}:F{target_row}'
+                # Update only columns D, E, F, G for this specific row
+                range_update = f'D{target_row}:G{target_row}'
                 worksheet.update(range_update, [booking_data])
                 
                 # If this is a multi-slot booking, fill additional rows with dashes
@@ -517,8 +518,8 @@ class GoogleSheetsService:
                     logger.info(f"Booking requires {duration_slots} slots, filling additional {duration_slots - 1} rows with dashes")
                     for i in range(1, duration_slots):
                         additional_row = target_row + i
-                        dash_data = ["-", "-", "-"]  # D, E, F columns
-                        dash_range = f'D{additional_row}:F{additional_row}'
+                        dash_data = ["-", "-", "-", "-"]  # D, E, F, G columns
+                        dash_range = f'D{additional_row}:G{additional_row}'
                         worksheet.update(dash_range, [dash_data])
                         logger.debug(f"  Filled row {additional_row} with dashes for multi-slot booking")
                 
@@ -566,11 +567,11 @@ class GoogleSheetsService:
             target_row = self._find_row_for_time_slot(worksheet, booking_date, booking_time)
             
             if target_row:
-                # Clear booking data columns (D, E, F) for all slots
-                empty_data = ["", "", ""]  # Empty client_id, name, service
+                # Clear booking data columns (D, E, F, G) for all slots
+                empty_data = ["", "", "", ""]  # Empty client_id, name, service, phone
                 
                 # Clear the main slot
-                range_update = f'D{target_row}:F{target_row}'
+                range_update = f'D{target_row}:G{target_row}'
                 worksheet.update(range_update, [empty_data])
                 logger.debug(f"Cleared main booking slot at row {target_row}")
                 
@@ -579,7 +580,7 @@ class GoogleSheetsService:
                     logger.info(f"Clearing additional {duration_slots - 1} slots for multi-slot booking")
                     for i in range(1, duration_slots):
                         additional_row = target_row + i
-                        additional_range = f'D{additional_row}:F{additional_row}'
+                        additional_range = f'D{additional_row}:G{additional_row}'
                         worksheet.update(additional_range, [empty_data])
                         logger.debug(f"  Cleared additional slot at row {additional_row}")
                 
@@ -629,11 +630,31 @@ class GoogleSheetsService:
             target_row = self._find_row_for_time_slot(worksheet, booking_date, booking_time)
             
             if target_row:
-                # Check if client_id column (D) is empty
+                # Check if ALL booking columns (D, E, F, G) are empty
+                # Any text in any of these columns means the slot is unavailable
                 client_id_cell = worksheet.cell(target_row, 4).value  # Column D
-                is_available = not client_id_cell or client_id_cell.strip() == ""
+                client_name_cell = worksheet.cell(target_row, 5).value  # Column E
+                service_cell = worksheet.cell(target_row, 6).value  # Column F
+                phone_cell = worksheet.cell(target_row, 7).value  # Column G
                 
-                logger.debug(f"Slot availability check result: {is_available} (client_id: '{client_id_cell}')")
+                # Check if any cell has content (any non-empty text)
+                cells_with_content = []
+                if client_id_cell and str(client_id_cell).strip():
+                    cells_with_content.append(f"D:'{client_id_cell}'")
+                if client_name_cell and str(client_name_cell).strip():
+                    cells_with_content.append(f"E:'{client_name_cell}'")
+                if service_cell and str(service_cell).strip():
+                    cells_with_content.append(f"F:'{service_cell}'")
+                if phone_cell and str(phone_cell).strip():
+                    cells_with_content.append(f"G:'{phone_cell}'")
+                
+                is_available = len(cells_with_content) == 0
+                
+                if cells_with_content:
+                    logger.debug(f"Slot NOT available - found content in: {', '.join(cells_with_content)}")
+                else:
+                    logger.debug("Slot is available - all booking columns are empty")
+                
                 return is_available
             else:
                 logger.warning(f"Time slot not found in sheets structure: {booking_date} {booking_time}")
