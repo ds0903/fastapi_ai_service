@@ -11,6 +11,20 @@ import logging
 import sys
 import random
 import string
+import os
+
+from app.database import get_db, create_tables, SessionLocal
+from app.config import settings, ProjectConfig
+from app.models import (
+    SendPulseMessage, 
+    WebhookResponse, 
+    ProjectStats,
+    MessageStatus
+)
+from app.services.message_queue import MessageQueueService
+from app.services.claude_service import ClaudeService
+from app.services.google_sheets import GoogleSheetsService
+from app.services.booking_service import BookingService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,20 +43,111 @@ def generate_message_id() -> str:
     return ''.join(random.choices(string.ascii_letters + string.digits, k=10))
 
 
-from app.database import get_db, create_tables, SessionLocal
-from app.config import settings, ProjectConfig
-from app.models import (
-    SendPulseMessage, 
-    WebhookResponse, 
-    ErrorResponse,
-    ProjectStats,
-    MessageStatus
-)
-from app.services.message_queue import MessageQueueService
-from app.services.claude_service import ClaudeService
-from app.services.google_sheets import GoogleSheetsService
-from app.services.booking_service import BookingService
-from app.services.sendpulse_service import SendPulseService
+def load_local_config() -> Dict[str, Any]:
+    """Load local configuration from local_config.json"""
+    config_file = "local_config.json"
+    
+    if not os.path.exists(config_file):
+        logger.warning(f"Local config file '{config_file}' not found. Using default configuration.")
+        return {
+            "default": {
+                "specialists": ["Арина", "Эдуард", "Инна", "Жанна"],
+                "services": {
+                    "Чистка лица": 3,
+                    "Уход за кожей лица": 3,
+                    "Пилинг": 2,
+                    "Карбоновый пилинг": 2,
+                    "Микродермабразия": 2,
+                    "Коагуляция": 1,
+                    "Мезотерапия": 2,
+                    "Биоревитализация": 2,
+                    "Контурная пластика": 3,
+                    "Алмазная микродермабразия": 2,
+                    "Безинъекционная мезотерапия": 2,
+                    "Плазмолифтинг": 3,
+                    "Карбоновый пилинг — 900": 2,
+                    "BB glow": 4,
+                    "УЗ чистка": 3,
+                    "Гидропилинг": 2,
+                    "RF лифтинг": 2,
+                    "Фонофорез": 2,
+                    "Смас лифтинг лица": 4,
+                    "Чистка лица и уход за лицом": 4,
+                    "Пилинг — 600": 2,
+                    "Массаж лица": 2,
+                    "Пирсинг ушей": 1,
+                    "Лечение гипергидроза": 2,
+                    "Липолитики": 2,
+                    "Нитевой лифтинг": 3,
+                    "Коррекция мимических морщин": 2,
+                    "Гиалуронидаза": 2,
+                    "Увеличение и коррекция губ": 2,
+                    "Бланчтерапия": 2,
+                    "Склеротерапия": 2,
+                    "Миостимуляция тела": 1,
+                    "Консультация подолога": 2,
+                    "Установка скоб": 1,
+                    "Медицинский педикюр": 3,
+                    "Лазерное лечение онихомикоза": 2,
+                    "Изготовление ортопедических стелек": 3,
+                    "Общий массаж": 2,
+                    "Массаж спины": 2,
+                    "Антицеллюлитный массаж": 3,
+                    "Вакуумный": 2,
+                    "Стоун терапия": 3,
+                    "Шоколадный массаж": 3,
+                    "Массаж со скрабом": 2,
+                    "Шоколадное обертывание": 2,
+                    "Грязевые обертывания": 2,
+                    "Лимфодренажный массаж": 3,
+                    "Прессотерапия": 2,
+                    "Коллагенарий": 1,
+                    "Солярий горизонтальный": 1,
+                    "Солярий вертикальный": 1,
+                    "Турбо солярий": 1,
+                    "Коррекция формы бровей": 2,
+                    "Окрашивание бровей": 2,
+                    "Ламинирование бровей": 3,
+                    "Окрашивание ресниц": 1,
+                    "Ламинирование ресниц": 3,
+                    "Маникюр без покрытия": 2,
+                    "Маникюр с покр. гель": 4,
+                    "Покрытие гель": 2,
+                    "Наращивание, коррекция с маникюром": 5,
+                    "Педикюр без покрытия": 3,
+                    "Педикюр с покрытием гель": 4,
+                    "Чистка пальцев ног": 2,
+                    "SPA для ног": 3,
+                    "Женская стрижка": 3,
+                    "Мужская стрижка": 2,
+                    "Детская стрижка": 2,
+                    "Окрашивание волос": 8,
+                    "Уход за волосами": 4,
+                    "Укладка волос": 2,
+                    "Прически": 4,
+                    "Плетение кос": 2,
+                    "Кератиновое насыщение волос": 8,
+                    "Наращивание волос 1 прядь": 10
+                }
+            }
+        }
+    
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            logger.info(f"Loaded local configuration from '{config_file}'")
+            return config
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing local config file '{config_file}': {e}")
+        logger.warning("Using default configuration due to parsing error")
+        return load_local_config.__defaults__[0] if hasattr(load_local_config, '__defaults__') else {}
+    except Exception as e:
+        logger.error(f"Error loading local config file '{config_file}': {e}")
+        logger.warning("Using default configuration due to loading error")
+        return {}
+
+
+
 
 
 project_configs = {}
@@ -55,87 +160,32 @@ async def lifespan(app: FastAPI):
     # Create database session for initialization
     db = SessionLocal()
     try:
+        # Load local configuration
+        local_config = load_local_config()
+        
         # Load project configurations
         default_config = ProjectConfig("default")
-        default_config.specialists = ["Арина", "Эдуард", "Инна", "Жанна"]
-        default_config.services = {
-            "Чистка лица": 3,
-            "Уход за кожей лица": 3,
-            "Пилинг": 2,
-            "Карбоновый пилинг": 2,
-            "Микродермабразия": 2,
-            "Коагуляция": 1,
-            "Мезотерапия": 2,
-            "Биоревитализация": 2,
-            "Контурная пластика": 3,
-            "Алмазная микродермабразия": 2,
-            "Безинъекционная мезотерапия": 2,
-            "Плазмолифтинг": 3,
-            "Карбоновый пилинг — 900": 2,
-            "BB glow": 4,
-            "УЗ чистка": 3,
-            "Гидропилинг": 2,
-            "RF лифтинг": 2,
-            "Фонофорез": 2,
-            "Смас лифтинг лица": 4,
-            "Чистка лица и уход за лицом": 4,
-            "Пилинг — 600": 2,
-            "Массаж лица": 2,
-            "Пирсинг ушей": 1,
-            "Лечение гипергидроза": 2,
-            "Липолитики": 2,
-            "Нитевой лифтинг": 3,
-            "Коррекция мимических морщин": 2,
-            "Гиалуронидаза": 2,
-            "Увеличение и коррекция губ": 2,
-            "Бланчтерапия": 2,
-            "Склеротерапия": 2,
-            "Миостимуляция тела": 1,
-            "Консультация подолога": 2,
-            "Установка скоб": 1,
-            "Медицинский педикюр": 3,
-            "Лазерное лечение онихомикоза": 2,
-            "Изготовление ортопедических стелек": 3,
-            "Общий массаж": 2,
-            "Массаж спины": 2,
-            "Антицеллюлитный массаж": 3,
-            "Вакуумный": 2,
-            "Стоун терапия": 3,
-            "Шоколадный массаж": 3,
-            "Массаж со скрабом": 2,
-            "Шоколадное обертывание": 2,
-            "Грязевые обертывания": 2,
-            "Лимфодренажный массаж": 3,
-            "Прессотерапия": 2,
-            "Коллагенарий": 1,
-            "Солярий горизонтальный": 1,
-            "Солярий вертикальный": 1,
-            "Турбо солярий": 1,
-            "Коррекция формы бровей": 2,
-            "Окрашивание бровей": 2,
-            "Ламинирование бровей": 3,
-            "Окрашивание ресниц": 1,
-            "Ламинирование ресниц": 3,
-            "Маникюр без покрытия": 2,
-            "Маникюр с покр. гель": 4,
-            "Покрытие гель": 2,
-            "Наращивание, коррекция с маникюром": 5,
-            "Педикюр без покрытия": 3,
-            "Педикюр с покрытием гель": 4,
-            "Чистка пальцев ног": 2,
-            "SPA для ног": 3,
-            "Женская стрижка": 3,
-            "Мужская стрижка": 2,
-            "Детская стрижка": 2,
-            "Окрашивание волос": 8,
-            "Уход за волосами": 4,
-            "Укладка волос": 2,
-            "Прически": 4,
-            "Плетение кос": 2,
-            "Кератиновое насыщение волос": 8,
-            "Наращивание волос 1 прядь": 10
-        }
+        
+        # Apply configuration from local_config.json if available
+        if "default" in local_config:
+            default_project_config = local_config["default"]
+            default_config.specialists = default_project_config.get("specialists", ["Арина", "Эдуард", "Инна", "Жанна"])
+            default_config.services = default_project_config.get("services", {})
+        else:
+            logger.warning("No 'default' configuration found in local config, using hardcoded defaults")
+            default_config.specialists = ["Арина", "Эдуард", "Инна", "Жанна"]
+            default_config.services = {}
+        
         project_configs["default"] = default_config
+        
+        # Load configurations for other projects if they exist in local_config.json
+        for project_id, project_data in local_config.items():
+            if project_id != "default":
+                project_config = ProjectConfig(project_id)
+                project_config.specialists = project_data.get("specialists", default_config.specialists)
+                project_config.services = project_data.get("services", default_config.services)
+                project_configs[project_id] = project_config
+                logger.info(f"Loaded configuration for project '{project_id}'")
         
         # Create database record for default project if it doesn't exist
         from app.database import Project
@@ -679,7 +729,7 @@ def get_dialogue_history(db: Session, project_id: str, client_id: str, message_i
         and_(
             Dialogue.project_id == project_id,
             Dialogue.client_id == client_id,
-            Dialogue.is_archived == False
+            Dialogue.is_archived.is_(False)
         )
     ).order_by(desc(Dialogue.timestamp)).limit(50).all()
     
