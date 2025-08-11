@@ -135,6 +135,7 @@ class WebhookResponse(BaseModel):
     status: str = Field(default="200", description="HTTP status code")
     send_status: str = Field(..., description="TRUE or FALSE")
     count: Optional[str] = Field(None, description="Error count as string, None if no errors but FALSE status, 0 if TRUE status")
+    user_message: Optional[str] = Field(None, description="Message from user")
 
 
 class ErrorResponse(BaseModel):
