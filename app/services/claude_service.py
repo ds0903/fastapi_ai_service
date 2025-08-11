@@ -451,6 +451,18 @@ class ClaudeService:
         """Build prompt for service identification"""
         base_prompt = get_prompt("service_identification")
         
+        # Replace the hardcoded services dictionary with project-specific services
+        services_dict = json.dumps(project_config.services, ensure_ascii=False, indent=4)
+        logger.debug(f"Service identification using services: {list(project_config.services.keys())}")
+        
+        # Replace the hardcoded dictionary in the prompt
+        if "СЛОВАРЬ УСЛУГ:" in base_prompt:
+            # Find and replace the services dictionary in the prompt
+            import re
+            pattern = r'СЛОВАРЬ УСЛУГ:\s*\{[^}]*(?:\{[^}]*\}[^}]*)*\}'
+            base_prompt = re.sub(pattern, f'СЛОВАРЬ УСЛУГ:\n{services_dict}', base_prompt, flags=re.DOTALL)
+            logger.debug(f"Replaced hardcoded services with project-specific services in service identification prompt")
+        
         return f"""
         {base_prompt}
         
@@ -475,8 +487,17 @@ class ClaudeService:
         weekday = datetime.now().strftime("%A")
         record_status = record_error if record_error else "-"
         
+        # Add project-specific information
+        specialists_list = json.dumps(project_config.specialists, ensure_ascii=False)
+        services_dict = json.dumps(project_config.services, ensure_ascii=False, indent=2)
+        logger.debug(f"Main response using specialists: {project_config.specialists}")
+        logger.debug(f"Main response using services: {list(project_config.services.keys())}")
+        
         return f"""
         {base_prompt}
+        
+        СПЕЦИАЛИСТЫ САЛОНА: {specialists_list}
+        УСЛУГИ САЛОНА (название: длительность в слотах): {services_dict}
         
         current_date: {current_date}
         weekday: {weekday}
