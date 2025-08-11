@@ -102,11 +102,43 @@ class BookingService:
             
             # Determine service duration
             duration_slots = 1
+            normalized_service = response.procedure
+            
             if response.procedure and response.procedure in self.project_config.services:
+                # Direct match found
                 duration_slots = self.project_config.services[response.procedure]
                 logger.info(f"Message ID: {message_id} - Service '{response.procedure}' requires {duration_slots} slots ({duration_slots * 30} minutes)")
+            elif response.procedure:
+                # No direct match - try service normalization
+                logger.info(f"Message ID: {message_id} - Service '{response.procedure}' not found in dictionary, attempting normalization...")
+                
+                from ..services.claude_service import ClaudeService
+                from ..database import SessionLocal
+                
+                try:
+                    # Create a new Claude service for normalization
+                    normalize_db = SessionLocal()
+                    claude_service = ClaudeService(normalize_db)
+                    
+                    normalized_service = await claude_service.normalize_service_name(
+                        self.project_config, 
+                        response.procedure, 
+                        message_id
+                    )
+                    
+                    if normalized_service in self.project_config.services:
+                        duration_slots = self.project_config.services[normalized_service]
+                        logger.info(f"Message ID: {message_id} - Normalized service '{normalized_service}' requires {duration_slots} slots ({duration_slots * 30} minutes)")
+                    else:
+                        logger.warning(f"Message ID: {message_id} - Service normalization failed, using default duration: 1 slot (30 minutes)")
+                    
+                    normalize_db.close()
+                    
+                except Exception as e:
+                    logger.error(f"Message ID: {message_id} - Error during service normalization: {e}")
+                    logger.warning(f"Message ID: {message_id} - Using default duration: 1 slot (30 minutes)")
             else:
-                logger.warning(f"Message ID: {message_id} - Unknown service '{response.procedure}', using default duration: 1 slot (30 minutes). Available services: {list(self.project_config.services.keys())}")
+                logger.warning(f"Message ID: {message_id} - No service specified, using default duration: 1 slot (30 minutes)")
             
             # Check if time slot is available (double-check both database and Google Sheets)
             logger.debug(f"Message ID: {message_id} - Checking slot availability: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}, duration={duration_slots}")
@@ -138,7 +170,7 @@ class BookingService:
             # Create booking
             end_time = datetime.combine(booking_date, booking_time) + timedelta(minutes=30 * duration_slots)
             logger.info(f"Message ID: {message_id} - Creating new booking: client_id={client_id}, specialist={response.cosmetolog}")
-            logger.info(f"Message ID: {message_id} -   Service: {response.procedure} ({duration_slots} slots)")
+            logger.info(f"Message ID: {message_id} -   Service: {normalized_service} ({duration_slots} slots)")
             logger.info(f"Message ID: {message_id} -   Time: {booking_date} {booking_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
             
             booking = Booking(
@@ -148,7 +180,7 @@ class BookingService:
                 appointment_time=booking_time,
                 client_id=client_id,
                 client_name=response.name,
-                service_name=response.procedure,
+                service_name=normalized_service,
                 client_phone=response.phone,
                 duration_minutes=duration_slots * 30,
                 status="active"
@@ -331,8 +363,47 @@ class BookingService:
             
             # Determine service duration
             duration_slots = 1
+            normalized_service = response.procedure or old_booking.service_name
+            
             if response.procedure and response.procedure in self.project_config.services:
+                # Direct match found
                 duration_slots = self.project_config.services[response.procedure]
+                logger.info(f"Message ID: {message_id} - Service '{response.procedure}' requires {duration_slots} slots ({duration_slots * 30} minutes)")
+            elif response.procedure:
+                # No direct match - try service normalization
+                logger.info(f"Message ID: {message_id} - Service '{response.procedure}' not found in dictionary, attempting normalization...")
+                
+                from ..services.claude_service import ClaudeService
+                from ..database import SessionLocal
+                
+                try:
+                    # Create a new Claude service for normalization
+                    normalize_db = SessionLocal()
+                    claude_service = ClaudeService(normalize_db)
+                    
+                    normalized_service = await claude_service.normalize_service_name(
+                        self.project_config, 
+                        response.procedure, 
+                        message_id
+                    )
+                    
+                    if normalized_service in self.project_config.services:
+                        duration_slots = self.project_config.services[normalized_service]
+                        logger.info(f"Message ID: {message_id} - Normalized service '{normalized_service}' requires {duration_slots} slots ({duration_slots * 30} minutes)")
+                    else:
+                        logger.warning(f"Message ID: {message_id} - Service normalization failed, using default duration: 1 slot (30 minutes)")
+                    
+                    normalize_db.close()
+                    
+                except Exception as e:
+                    logger.error(f"Message ID: {message_id} - Error during service normalization: {e}")
+                    logger.warning(f"Message ID: {message_id} - Using default duration: 1 slot (30 minutes)")
+            else:
+                # Keep old service if no new service specified
+                if old_booking.service_name in self.project_config.services:
+                    duration_slots = self.project_config.services[old_booking.service_name]
+                    normalized_service = old_booking.service_name
+                    logger.info(f"Message ID: {message_id} - Keeping existing service '{old_booking.service_name}' with {duration_slots} slots")
             
             # Check if new time slot is available (excluding the current booking)
             if not self._is_slot_available(response.cosmetolog, new_date, new_time, duration_slots, exclude_booking_id=old_booking.id):
@@ -352,7 +423,7 @@ class BookingService:
             old_booking.appointment_date = new_date
             old_booking.appointment_time = new_time
             old_booking.client_name = response.name or old_booking.client_name
-            old_booking.service_name = response.procedure or old_booking.service_name
+            old_booking.service_name = normalized_service
             old_booking.client_phone = response.phone or old_booking.client_phone
             old_booking.duration_minutes = duration_slots * 30
             old_booking.updated_at = datetime.utcnow()

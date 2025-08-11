@@ -470,6 +470,96 @@ class ClaudeService:
         current_message: {current_message}
         """
     
+    def _build_service_normalization_prompt(
+        self,
+        project_config: ProjectConfig,
+        service_name: str
+    ) -> str:
+        """Build prompt for service name normalization"""
+        services_dict_str = ""
+        for service, duration in project_config.services.items():
+            services_dict_str += f"- {service}\n"
+        
+        prompt = f"""Ты - ассистент для нормализации названий услуг косметологической клиники.
+
+ЗАДАЧА: Найти наиболее точное соответствие входящего названия услуги с эталонным словарем.
+
+СЛОВАРЬ ЭТАЛОННЫХ УСЛУГ:
+{services_dict_str}
+
+ПРАВИЛА:
+- Ищи семантически близкие соответствия
+- Игнорируй различия в регистре, пунктуации и пробелах
+- Учитывай сокращения и опечатки
+- Если входящее название содержит дополнительные уточнения (цены, время), сопоставляй с основной услугой
+- Если точное соответствие не найдено, выбери наиболее близкое по смыслу
+
+ФОРМАТ ВЫВОДА:
+Выводи ТОЛЬКО точное название услуги из словаря. Никаких дополнительных слов, объяснений или форматирования.
+
+ПРИМЕРЫ:
+Вход: "чистка лица ультразвуком"
+Выход: УЗ чистка
+
+Вход: "стрижка волос женщинам"
+Выход: Женская стрижка
+
+Вход: "маникюр с гелем"
+Выход: Маникюр с покр. гель
+
+Вход: "покраска волос"
+Выход: Окрашивание волос
+
+Входящее название услуги: {service_name}
+Выход:"""
+
+        return prompt
+    
+    async def normalize_service_name(
+        self,
+        project_config: ProjectConfig,
+        service_name: str,
+        message_id: str
+    ) -> str:
+        """Normalize service name using Claude to find exact match from services dictionary"""
+        logger.info(f"Message ID: {message_id} - Normalizing service name: '{service_name}'")
+        
+        try:
+            # Build normalization prompt
+            prompt = self._build_service_normalization_prompt(project_config, service_name)
+            
+            # Call Claude for service normalization
+            response = await self._retry_claude_request(
+                lambda client: client.messages.create(
+                    model=settings.claude_model,
+                    max_tokens=150,  # Short response expected
+                    messages=[
+                        {
+                            "role": "user", 
+                            "content": prompt
+                        }
+                    ]
+                ),
+                message_id=message_id
+            )
+            
+            # Extract normalized service name
+            normalized_service = response.content[0].text.strip()
+            
+            logger.info(f"Message ID: {message_id} - Service normalization result: '{service_name}' -> '{normalized_service}'")
+            
+            # Verify the normalized service exists in the dictionary
+            if normalized_service in project_config.services:
+                logger.info(f"Message ID: {message_id} - Normalized service '{normalized_service}' found in services dictionary")
+                return normalized_service
+            else:
+                logger.warning(f"Message ID: {message_id} - Normalized service '{normalized_service}' not found in services dictionary. Available: {list(project_config.services.keys())}")
+                return service_name  # Return original if normalization failed
+            
+        except Exception as e:
+            logger.error(f"Message ID: {message_id} - Error in service normalization: {e}")
+            return service_name  # Return original service name on error
+    
     def _build_main_response_prompt(
         self,
         project_config: ProjectConfig,
