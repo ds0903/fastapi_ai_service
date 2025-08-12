@@ -57,7 +57,8 @@ class ServiceIdentificationResult(BaseModel):
 
 class AvailableSlots(BaseModel):
     """Available booking slots for specialists"""
-    date_of_checking: str
+    date_of_checking: str  # The date these slots are for (DD.MM format)
+    target_date: str  # The target date being searched (DD.MM format) 
     slots_by_specialist: Dict[str, List[str]]
 
 

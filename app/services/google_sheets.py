@@ -248,7 +248,11 @@ class GoogleSheetsService:
             return await asyncio.to_thread(self.get_available_slots, db, target_date, time_fraction)
         except Exception as e:
             logger.error(f"Error in async get_available_slots: {e}", exc_info=True)
-            return AvailableSlots(slots_by_specialist={})
+            return AvailableSlots(
+                date_of_checking=date.today().strftime("%d.%m"),
+                target_date="error",
+                slots_by_specialist={}
+            )
     
     def get_available_slots(self, db: Session, target_date: date, time_fraction: int) -> AvailableSlots:
         """Get available slots for a specific date"""
@@ -284,7 +288,8 @@ class GoogleSheetsService:
             logger.debug(f"Specialist {specialist} has {len(slots)} available slots: {slots}")
         
         result = AvailableSlots(
-            date_of_checking=target_date.strftime("%d.%m"),
+            date_of_checking=date.today().strftime("%d.%m"), # When the check was performed
+            target_date=target_date.strftime("%d.%m"),       # The date these slots are FOR
             slots_by_specialist=available_slots
         )
         logger.info(f"Returning available slots for {target_date}: {len(available_slots)} specialists with total slots")
@@ -306,7 +311,11 @@ class GoogleSheetsService:
             )
         except Exception as e:
             logger.error(f"Error in async get_available_slots_by_time_range: {e}", exc_info=True)
-            return AvailableSlots(slots_by_specialist={})
+            return AvailableSlots(
+                date_of_checking=date.today().strftime("%d.%m"),
+                target_date="error",
+                slots_by_specialist={}
+            )
     
     def get_available_slots_by_time_range(
         self, 
@@ -360,6 +369,7 @@ class GoogleSheetsService:
         
         return AvailableSlots(
             date_of_checking=date.today().strftime("%d.%m"),
+            target_date="multiple_dates",  # For time range searches
             slots_by_specialist=formatted_slots
         )
     

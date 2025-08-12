@@ -481,6 +481,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             service_result = None
             available_slots = {}
             reserved_slots = {}
+            slots_target_date = None  # Track what date the slots are for
             current_date = date.today()
             
             if not intent_result.waiting:
@@ -553,11 +554,14 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             logger.error(f"Message ID: {message_id} - Error in parallel slot fetching for client_id={client_id}: {results[1]}")
                         elif slots:
                             available_slots = slots.slots_by_specialist
-                            logger.info(f"Message ID: {message_id} - Found available slots in parallel: {len(available_slots)} specialists")
+                            slots_target_date = slots.target_date
+                            logger.info(f"Message ID: {message_id} - Found available slots in parallel for target date {slots_target_date}: {len(available_slots)} specialists")
                             for specialist, specialist_slots in available_slots.items():
                                 logger.info(f"Message ID: {message_id} - Specialist {specialist}: {len(specialist_slots)} available slots: {specialist_slots}")
+                            logger.info(f"Message ID: {message_id} - IMPORTANT: These slots are FOR DATE: {slots_target_date}, checked on: {slots.date_of_checking}")
                         else:
                             logger.warning(f"Message ID: {message_id} - No available slots returned from slot fetching task")
+                            slots_target_date = "no_slots"
                     
                     # Get client bookings result
                     client_bookings_idx = 2 if slot_task else 1
@@ -589,6 +593,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             if target_date:
                                 slots = await sheets_service.get_available_slots_async(db, target_date, service_result.time_fraction)
                                 available_slots = slots.slots_by_specialist
+                                slots_target_date = slots.target_date
+                                logger.info(f"Message ID: {message_id} - Refetched slots for target date {slots_target_date} with time_fraction {service_result.time_fraction}")
                         elif intent_result.desire_time0 and intent_result.desire_time1:
                             start_time = parse_time(intent_result.desire_time0)
                             end_time = parse_time(intent_result.desire_time1)
@@ -597,6 +603,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                                     db, start_time, end_time, service_result.time_fraction
                                 )
                                 available_slots = slots.slots_by_specialist
+                                slots_target_date = slots.target_date
+                                logger.info(f"Message ID: {message_id} - Refetched time range slots for target date {slots_target_date} with time_fraction {service_result.time_fraction}")
                     except Exception as e:
                         error_count += 1
                         logger.error(f"Message ID: {message_id} - Error refetching slots with correct time_fraction for client_id={client_id}: {e}")
@@ -621,7 +629,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             else:
                 logger.info(f"Message ID: {message_id} - Found {total_available_slots} total available slots across all specialists")
                 
-            logger.info(f"Message ID: {message_id} - SENDING TO CLAUDE: available_slots={available_slots}, reserved_slots={reserved_slots}")
+            logger.info(f"Message ID: {message_id} - SENDING TO CLAUDE: available_slots={available_slots}, reserved_slots={reserved_slots}, slots_target_date={slots_target_date}")
             try:
                 main_response = await claude_service.generate_main_response(
                     project_config,
@@ -631,7 +639,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     available_slots,
                     reserved_slots,
                     client_bookings,
-                    message_id
+                    message_id,
+                    slots_target_date  # Pass the target date information
                 )
                 logger.debug(f"Message ID: {message_id} - Main response generated for client_id={client_id}: activate_booking={main_response.activate_booking}, reject_order={main_response.reject_order}, change_order={main_response.change_order}")
             except Exception as e:

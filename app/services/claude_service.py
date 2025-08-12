@@ -326,6 +326,7 @@ class ClaudeService:
         reserved_slots: Dict[str, Any],
         rows_of_owner: str,
         message_id: str,
+        slots_target_date: Optional[str] = None,
         zip_history: Optional[str] = None,
         record_error: Optional[str] = None
     ) -> ClaudeMainResponse:
@@ -346,7 +347,8 @@ class ClaudeService:
             reserved_slots,
             rows_of_owner,
             zip_history,
-            record_error
+            record_error,
+            slots_target_date
         )
         
         logger.debug(f"Message ID: {message_id} - Built main response prompt, length: {len(prompt)} characters")
@@ -570,7 +572,8 @@ class ClaudeService:
         reserved_slots: Dict[str, Any],
         rows_of_owner: str,
         zip_history: Optional[str],
-        record_error: Optional[str]
+        record_error: Optional[str],
+        slots_target_date: Optional[str] = None
     ) -> str:
         """Build prompt for main response generation"""
         base_prompt = get_prompt("main_response")
@@ -592,6 +595,7 @@ class ClaudeService:
         current_date: {current_date}
         weekday: {weekday}
         available_slots: {json.dumps(available_slots, ensure_ascii=False)}
+        slots_target_date: {slots_target_date or "unknown"}
         reserved_slots: {json.dumps(reserved_slots, ensure_ascii=False)}
         rows_of_owner: {rows_of_owner}
         zip_history: {zip_history or ""}
