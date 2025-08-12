@@ -504,11 +504,14 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 slot_task = None
                 logger.debug(f"Message ID: {message_id} - Checking intent conditions for slot fetching: date_order='{intent_result.date_order}', desire_time0='{intent_result.desire_time0}', desire_time1='{intent_result.desire_time1}'")
                 if intent_result.date_order:
-                    logger.debug(f"Message ID: {message_id} - Preparing slot fetch for specific date {intent_result.date_order}")
+                    logger.info(f"Message ID: {message_id} - Preparing slot fetch for specific date {intent_result.date_order}")
                     target_date = parse_date(intent_result.date_order)
                     if target_date:
+                        logger.info(f"Message ID: {message_id} - Parsed date successfully: {target_date}")
                         # Use default time_fraction initially, will adjust after service identification
                         slot_task = sheets_service.get_available_slots_async(db, target_date, 1)
+                    else:
+                        logger.warning(f"Message ID: {message_id} - Failed to parse date '{intent_result.date_order}' from intent detection")
                 elif intent_result.desire_time0 and intent_result.desire_time1:
                     logger.debug(f"Message ID: {message_id} - Preparing slot fetch for time range {intent_result.desire_time0}-{intent_result.desire_time1}")
                     start_time = parse_time(intent_result.desire_time0)
@@ -550,7 +553,11 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             logger.error(f"Message ID: {message_id} - Error in parallel slot fetching for client_id={client_id}: {results[1]}")
                         elif slots:
                             available_slots = slots.slots_by_specialist
-                            logger.debug(f"Message ID: {message_id} - Found available slots in parallel: {len(available_slots)} specialists")
+                            logger.info(f"Message ID: {message_id} - Found available slots in parallel: {len(available_slots)} specialists")
+                            for specialist, specialist_slots in available_slots.items():
+                                logger.info(f"Message ID: {message_id} - Specialist {specialist}: {len(specialist_slots)} available slots: {specialist_slots}")
+                        else:
+                            logger.warning(f"Message ID: {message_id} - No available slots returned from slot fetching task")
                     
                     # Get client bookings result
                     client_bookings_idx = 2 if slot_task else 1
@@ -606,6 +613,14 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             
             # Step 3: Generate main response (async)
             logger.info(f"Message ID: {message_id} - Generating main response for client_id={client_id}")
+            
+            # Log detailed slot information for debugging
+            total_available_slots = sum(len(slots) for slots in available_slots.values()) if available_slots else 0
+            if total_available_slots == 0:
+                logger.warning(f"Message ID: {message_id} - NO AVAILABLE SLOTS FOUND for client request. This might cause the bot to say 'no data available'")
+            else:
+                logger.info(f"Message ID: {message_id} - Found {total_available_slots} total available slots across all specialists")
+                
             logger.info(f"Message ID: {message_id} - SENDING TO CLAUDE: available_slots={available_slots}, reserved_slots={reserved_slots}")
             try:
                 main_response = await claude_service.generate_main_response(
@@ -773,18 +788,50 @@ def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: s
 
 
 def parse_date(date_str: str) -> Optional[date]:
-    """Parse date string"""
+    """Parse date string with improved error handling"""
+    if not date_str:
+        logger.warning("Empty date string provided")
+        return None
+    
     logger.debug(f"Parsing date string: '{date_str}'")
+    
     try:
-        if len(date_str.split('.')) == 2:
+        # Clean the input string
+        cleaned_date = date_str.strip()
+        
+        # Handle DD.MM format
+        if len(cleaned_date.split('.')) == 2:
             current_year = datetime.now().year
-            parsed_date = datetime.strptime(f"{date_str}.{current_year}", "%d.%m.%Y").date()
-            logger.debug(f"Successfully parsed date: {parsed_date}")
+            parsed_date = datetime.strptime(f"{cleaned_date}.{current_year}", "%d.%m.%Y").date()
+            logger.info(f"Successfully parsed date '{date_str}' as {parsed_date}")
+            
+            # Validate that the date is reasonable (not too far in the past or future)
+            today = date.today()
+            if parsed_date < today:
+                # If the date is in the past, assume it's next year
+                parsed_date = parsed_date.replace(year=current_year + 1)
+                logger.info(f"Date was in the past, adjusting to next year: {parsed_date}")
+            elif parsed_date > today.replace(year=current_year + 1):
+                logger.warning(f"Date is too far in the future: {parsed_date}")
+                return None
+                
             return parsed_date
-        logger.warning(f"Invalid date format: '{date_str}' (expected DD.MM)")
+            
+        # Handle DD.MM.YYYY format  
+        elif len(cleaned_date.split('.')) == 3:
+            parsed_date = datetime.strptime(cleaned_date, "%d.%m.%Y").date()
+            logger.info(f"Successfully parsed full date '{date_str}' as {parsed_date}")
+            return parsed_date
+            
+        else:
+            logger.warning(f"Invalid date format: '{date_str}' (expected DD.MM or DD.MM.YYYY)")
+            return None
+            
+    except ValueError as e:
+        logger.warning(f"Failed to parse date '{date_str}': {e}")
         return None
     except Exception as e:
-        logger.warning(f"Failed to parse date '{date_str}': {e}")
+        logger.error(f"Unexpected error parsing date '{date_str}': {e}")
         return None
 
 
