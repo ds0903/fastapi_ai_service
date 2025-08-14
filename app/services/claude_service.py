@@ -642,12 +642,19 @@ class ClaudeService:
             desire_time_0 = result.get("desire_time_0") or result.get("desire_time0")
             desire_time_1 = result.get("desire_time_1") or result.get("desire_time1")
             
+            # Priority logic: if we have date_order or desire_time, ignore explicit waiting
+            has_date_or_time = result.get("date_order") or desire_time_0
+            waiting_value = 0 if has_date_or_time else int(result.get("waiting", 1))
+            
             parsed_result = {
-                "waiting": result.get("waiting", 0 if result.get("date_order") or desire_time_0 else 1),
+                "waiting": waiting_value,
                 "date_order": result.get("date_order"),
                 "desire_time0": desire_time_0,
                 "desire_time1": desire_time_1
             }
+            
+            logger.info(f"Message ID: {message_id} - PARSING LOGIC: has_date_or_time={has_date_or_time}, claude_waiting={result.get('waiting')}, final_waiting={waiting_value}")
+            logger.info(f"Message ID: {message_id} - PARSING LOGIC: desire_time_0='{desire_time_0}', desire_time_1='{desire_time_1}'")
             logger.debug(f"Message ID: {message_id} - Intent response parsed successfully: {parsed_result}")
             return parsed_result
         except Exception as e:
