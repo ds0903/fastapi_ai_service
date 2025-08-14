@@ -29,7 +29,7 @@ class DialogueArchivingService:
         
         try:
             # Find all clients that have dialogues older than compression_hours that need compression
-            cutoff_time = datetime.utcnow() - timedelta(hours=self.compression_hours)
+            cutoff_time = datetime.now() - timedelta(hours=self.compression_hours)
             logger.info(f"Compressing dialogues older than {cutoff_time} (cutoff: {self.compression_hours} hours ago)")
             
             # Debug: Check total dialogues in database
