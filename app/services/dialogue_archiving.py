@@ -16,7 +16,7 @@ class DialogueArchivingService:
     """Service for compressing dialogues older than 24 hours into zip_history"""
     
     def __init__(self):
-        self.compression_hours = 0.5  # Always compress after 24 hours
+        self.compression_hours = 24  # Always compress after 24 hours
         logger.debug(f"DialogueArchivingService initialized with compression_hours={self.compression_hours}")
     
     async def compress_old_dialogues(self, project_configs: Dict[str, ProjectConfig]):
