@@ -34,10 +34,10 @@ class DialogueArchivingService:
             
             # Debug: Check total dialogues in database
             total_dialogues = db.query(Dialogue).count()
-            unarchived_dialogues = db.query(Dialogue).filter(Dialogue.is_archived is False).count()
+            unarchived_dialogues = db.query(Dialogue).filter(Dialogue.is_archived == False).count()
             old_dialogues = db.query(Dialogue).filter(
                 Dialogue.timestamp < cutoff_time,
-                Dialogue.is_archived is False
+                Dialogue.is_archived == False
             ).count()
             
             logger.info(f"Database stats: Total dialogues: {total_dialogues}, Unarchived: {unarchived_dialogues}, Old dialogues (>{self.compression_hours}h): {old_dialogues}")
@@ -45,7 +45,7 @@ class DialogueArchivingService:
             # Get all clients with old dialogues that need compression
             clients_to_process = db.query(Dialogue.project_id, Dialogue.client_id).filter(
                 Dialogue.timestamp < cutoff_time,
-                Dialogue.is_archived is False
+                Dialogue.is_archived == False
             ).distinct().all()
             
             logger.info(f"Found {len(clients_to_process)} clients with dialogues ready for compression")
@@ -102,7 +102,7 @@ class DialogueArchivingService:
                             Dialogue.project_id == project_id,
                             Dialogue.client_id == client_id,
                             Dialogue.timestamp < cutoff_time,
-                            Dialogue.is_archived is False
+                            Dialogue.is_archived == False
                         )
                     ).order_by(Dialogue.timestamp).all()
                     
@@ -192,7 +192,7 @@ class DialogueArchivingService:
                 Dialogue.project_id == project_id,
                 Dialogue.client_id == client_id,
                 Dialogue.timestamp >= cutoff_time,
-                Dialogue.is_archived is False
+                Dialogue.is_archived == False
             )
         ).order_by(Dialogue.timestamp).all()
         
@@ -252,12 +252,17 @@ class DialogueArchivingService:
         try:
             total_dialogues = db.query(Dialogue).count()
             archived_dialogues = db.query(Dialogue).filter(
-                Dialogue.is_archived is True
+                Dialogue.is_archived == True
             ).count()
             
-            clients_with_archives = db.query(ClientLastActivity).filter(
-                ClientLastActivity.zip_history.isnot(None)
-            ).count()
+            # Try to get clients_with_archives, but handle missing column gracefully
+            try:
+                clients_with_archives = db.query(ClientLastActivity).filter(
+                    ClientLastActivity.zip_history.isnot(None)
+                ).count()
+            except Exception as column_error:
+                logger.warning(f"Could not query zip_history column (migration needed?): {column_error}")
+                clients_with_archives = 0
             
             stats = {
                 "total_dialogues": total_dialogues,
