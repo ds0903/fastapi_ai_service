@@ -638,11 +638,15 @@ class ClaudeService:
             logger.info(f"Message ID: {message_id} - CLEANED RESPONSE: '{clean_response}'")
             
             result = json.loads(clean_response)
+            # Handle both underscore and non-underscore formats for desire_time
+            desire_time_0 = result.get("desire_time_0") or result.get("desire_time0")
+            desire_time_1 = result.get("desire_time_1") or result.get("desire_time1")
+            
             parsed_result = {
-                "waiting": result.get("waiting", 0 if result.get("date_order") or result.get("desire_time0") else 1),
+                "waiting": result.get("waiting", 0 if result.get("date_order") or desire_time_0 else 1),
                 "date_order": result.get("date_order"),
-                "desire_time0": result.get("desire_time0"),
-                "desire_time1": result.get("desire_time1")
+                "desire_time0": desire_time_0,
+                "desire_time1": desire_time_1
             }
             logger.debug(f"Message ID: {message_id} - Intent response parsed successfully: {parsed_result}")
             return parsed_result
