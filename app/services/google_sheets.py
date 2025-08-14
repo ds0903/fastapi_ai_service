@@ -267,6 +267,18 @@ class GoogleSheetsService:
         ).all()
         logger.debug(f"Found {len(bookings)} active bookings for date {target_date}")
         
+        # Debug: Log all bookings found
+        for booking in bookings:
+            logger.debug(f"Booking found: {booking.specialist_name} at {booking.appointment_time} for {booking.duration_minutes} minutes (client: {booking.client_id})")
+            
+        # Debug: Also check what's actually in the database for this date
+        all_bookings_for_date = db.query(Booking).filter(
+            Booking.appointment_date == target_date
+        ).all()
+        logger.debug(f"Total bookings in DB for {target_date} (all projects/statuses): {len(all_bookings_for_date)}")
+        for booking in all_bookings_for_date:
+            logger.debug(f"  - {booking.project_id}/{booking.status}: {booking.specialist_name} at {booking.appointment_time} (client: {booking.client_id})")
+        
         # Group bookings by specialist
         bookings_by_specialist = {}
         for booking in bookings:
@@ -291,11 +303,24 @@ class GoogleSheetsService:
         reserved_slots = {}
         for specialist in self.project_config.specialists:
             specialist_bookings = bookings_by_specialist.get(specialist, [])
+            logger.debug(f"Processing reserved slots for specialist '{specialist}': found {len(specialist_bookings)} bookings")
             slots = self._get_reserved_slots_for_specialist(
                 specialist_bookings, target_date, time_fraction
             )
             reserved_slots[f"reserved_slots_{specialist.lower()}"] = slots
             logger.debug(f"Specialist {specialist} has {len(slots)} reserved slots: {slots}")
+            
+            # Additional debug: Check if specialist name case sensitivity is an issue
+            all_booking_specialists = set(booking.specialist_name for booking in bookings)
+            if all_booking_specialists:
+                logger.debug(f"All booking specialist names found in DB: {all_booking_specialists}")
+                if specialist not in all_booking_specialists:
+                    logger.warning(f"Specialist '{specialist}' from config not found in bookings. Available specialists in bookings: {all_booking_specialists}")
+            
+            # Check for case-insensitive matches
+            for booking_specialist in all_booking_specialists:
+                if booking_specialist.lower() == specialist.lower() and booking_specialist != specialist:
+                    logger.warning(f"Case mismatch: Config has '{specialist}' but booking has '{booking_specialist}'")
 
         result = AvailableSlots(
             date_of_checking=date.today().strftime("%d.%m"), # When the check was performed
@@ -451,35 +476,42 @@ class GoogleSheetsService:
                 slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
         
+        logger.debug(f"Found {len(occupied_slots)} occupied slots from {len(bookings)} bookings: {sorted([slot.strftime('%H:%M') for slot in occupied_slots])}")
+        
         # Add edge slots that would make booking impossible with current time_fraction
         reserved_slots = set()
         
         # All occupied slots are reserved
         reserved_slots.update(occupied_slots)
         
-        # Add slots that are too close to end of work day for the required duration
-        current_time = datetime.combine(target_date, work_start)
-        end_time = datetime.combine(target_date, work_end)
-        
-        while current_time < end_time:
-            slot_time = current_time.time()
+        # Safety check: if time_fraction is 0 (unknown service), only include occupied slots
+        # Don't try to calculate edge cases since we don't know the service duration
+        if time_fraction <= 0:
+            logger.debug(f"time_fraction is {time_fraction}, only including occupied slots in reserved_slots")
+        else:
+            # Add slots that are too close to end of work day for the required duration
+            current_time = datetime.combine(target_date, work_start)
+            end_time = datetime.combine(target_date, work_end)
             
-            # Check if this slot would extend beyond work hours with current time_fraction
-            if current_time + timedelta(minutes=30 * time_fraction) > end_time:
-                reserved_slots.add(slot_time)
-            
-            # Check if starting at this slot would conflict with existing bookings
-            for i in range(time_fraction):
-                check_time = (current_time + timedelta(minutes=30*i)).time()
-                if check_time in occupied_slots:
-                    # This slot would conflict, so all slots that would include this occupied slot are reserved
-                    for j in range(time_fraction):
-                        conflict_start = current_time - timedelta(minutes=30*j)
-                        if conflict_start.time() >= work_start and conflict_start < current_time + timedelta(minutes=30):
-                            reserved_slots.add(conflict_start.time())
-                    break
-            
-            current_time += timedelta(minutes=30)
+            while current_time < end_time:
+                slot_time = current_time.time()
+                
+                # Check if this slot would extend beyond work hours with current time_fraction
+                if current_time + timedelta(minutes=30 * time_fraction) > end_time:
+                    reserved_slots.add(slot_time)
+                
+                # Check if starting at this slot would conflict with existing bookings
+                for i in range(time_fraction):
+                    check_time = (current_time + timedelta(minutes=30*i)).time()
+                    if check_time in occupied_slots:
+                        # This slot would conflict, so all slots that would include this occupied slot are reserved
+                        for j in range(time_fraction):
+                            conflict_start = current_time - timedelta(minutes=30*j)
+                            if conflict_start.time() >= work_start and conflict_start < current_time + timedelta(minutes=30):
+                                reserved_slots.add(conflict_start.time())
+                        break
+                
+                current_time += timedelta(minutes=30)
         
         # Convert to sorted list of time strings
         reserved_slots_list = []
