@@ -295,22 +295,40 @@ class GoogleSheetsService:
         for specialist in self.project_config.specialists:
             specialist_bookings = bookings_by_specialist.get(specialist, [])
             logger.debug(f"Specialist {specialist} has {len(specialist_bookings)} bookings for date {target_date}")
-            slots = self._get_available_slots_for_specialist(
-                specialist_bookings, target_date, time_fraction
-            )
+            
+            # CRITICAL FIX: Get reserved slots from Google Sheets as the PRIMARY source of truth
+            sheets_reserved = self._get_reserved_slots_from_sheets(specialist, target_date, time_fraction)
+            logger.info(f"SHEETS RESERVED SLOTS: Found {len(sheets_reserved)} reserved slots in Google Sheets for {specialist}: {sheets_reserved}")
+            
+            # Generate all possible work slots
+            all_work_slots = self._get_all_work_slots_for_specialist(target_date, time_fraction)
+            logger.info(f"ALL WORK SLOTS: Generated {len(all_work_slots)} total work slots for {specialist}")
+            
+            # Filter out slots that are reserved in Google Sheets (PRIMARY source of truth)
+            slots = [slot for slot in all_work_slots if slot not in sheets_reserved]
+            
             available_slots[f"available_slots_{specialist.lower()}"] = slots
-            logger.debug(f"Specialist {specialist} has {len(slots)} available slots: {slots}")
+            logger.info(f"Specialist {specialist} has {len(all_work_slots)} total work slots, {len(sheets_reserved)} reserved in sheets, final available: {len(slots)} slots")
         
-        # Generate reserved slots for each specialist
+        # Generate reserved slots for each specialist (use Google Sheets as PRIMARY source)
         reserved_slots = {}
         for specialist in self.project_config.specialists:
             specialist_bookings = bookings_by_specialist.get(specialist, [])
             logger.debug(f"Processing reserved slots for specialist '{specialist}': found {len(specialist_bookings)} bookings")
-            slots = self._get_reserved_slots_for_specialist(
+            
+            # CRITICAL FIX: Use Google Sheets as primary source for reserved slots
+            sheets_slots = self._get_reserved_slots_from_sheets(specialist, target_date, time_fraction)
+            
+            # ALSO get reserved slots from database as backup/additional source
+            database_slots = self._get_reserved_slots_for_specialist(
                 specialist_bookings, target_date, time_fraction
             )
-            reserved_slots[f"reserved_slots_{specialist.lower()}"] = slots
-            logger.debug(f"Specialist {specialist} has {len(slots)} reserved slots: {slots}")
+            
+            # Combine and deduplicate slots from both sources (Sheets takes priority)
+            combined_slots = sorted(list(set(sheets_slots + database_slots)))
+            
+            reserved_slots[f"reserved_slots_{specialist.lower()}"] = combined_slots
+            logger.info(f"Specialist {specialist} has {len(sheets_slots)} reserved slots from Sheets, {len(database_slots)} from DB, {len(combined_slots)} total: {combined_slots}")
             
             # Additional debug: Check if specialist name case sensitivity is an issue
             all_booking_specialists = set(booking.specialist_name for booking in bookings)
@@ -414,6 +432,33 @@ class GoogleSheetsService:
             reserved_slots_by_specialist={}
         )
     
+    def _get_all_work_slots_for_specialist(
+        self, 
+        target_date: date, 
+        time_fraction: int
+    ) -> List[str]:
+        """Get all possible work slots for a specialist on a specific date"""
+        work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
+        work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
+        logger.debug(f"Generating all work slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
+        
+        # Generate all possible slots
+        all_slots = []
+        current_time = datetime.combine(target_date, work_start)
+        end_time = datetime.combine(target_date, work_end)
+        
+        # Safety check: if time_fraction is 0 (unknown service), use minimum 1 slot for availability check
+        effective_time_fraction = max(1, time_fraction)
+        logger.debug(f"Using effective_time_fraction={effective_time_fraction} (original time_fraction={time_fraction})")
+        
+        while current_time + timedelta(minutes=30 * effective_time_fraction) <= end_time:
+            slot_time = current_time.time()
+            all_slots.append(slot_time.strftime("%H:%M"))
+            current_time += timedelta(minutes=30)
+        
+        logger.debug(f"Generated {len(all_slots)} total work slots for {target_date}: {all_slots}")
+        return all_slots
+
     def _get_available_slots_for_specialist(
         self, 
         bookings: List[Booking], 
@@ -526,6 +571,70 @@ class GoogleSheetsService:
         
         logger.debug(f"Generated {len(reserved_slots_list)} reserved slots for {target_date}: {reserved_slots_list}")
         return reserved_slots_list
+    
+    def _get_reserved_slots_from_sheets(self, specialist_name: str, target_date: date, time_fraction: int) -> List[str]:
+        """Get reserved slots by reading directly from Google Sheets"""
+        if not self.spreadsheet:
+            logger.warning(f"Cannot check reserved slots from sheets: no spreadsheet connection for {specialist_name}")
+            return []
+        
+        logger.debug(f"Reading reserved slots from Google Sheets for {specialist_name} on {target_date}")
+        
+        try:
+            # Get worksheet for specialist
+            try:
+                worksheet = self.spreadsheet.worksheet(specialist_name)
+            except gspread.WorksheetNotFound:
+                logger.warning(f"Worksheet not found for specialist {specialist_name}")
+                return []
+            
+            # Get work hours
+            work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
+            work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
+            
+            reserved_slots = []
+            current_time = datetime.combine(target_date, work_start)
+            
+            # Check each 30-minute slot
+            while current_time.time() <= work_end:
+                try:
+                    # Find the row for this time slot
+                    target_row = self._find_row_for_time_slot(worksheet, target_date, current_time.time())
+                    
+                    if target_row:
+                        # Check if ANY booking columns (D, E, F, G) have content
+                        client_id_cell = worksheet.cell(target_row, 4).value  # Column D
+                        client_name_cell = worksheet.cell(target_row, 5).value  # Column E  
+                        service_cell = worksheet.cell(target_row, 6).value  # Column F
+                        phone_cell = worksheet.cell(target_row, 7).value  # Column G
+                        
+                        # If any cell has content, this slot is occupied
+                        if any(self._has_content(cell) for cell in [client_id_cell, client_name_cell, service_cell, phone_cell]):
+                            slot_time = current_time.time().strftime('%H:%M')
+                            reserved_slots.append(slot_time)
+                            logger.debug(f"Found occupied slot in sheets: {slot_time} (client_id: {client_id_cell})")
+                
+                except Exception as e:
+                    logger.debug(f"Error checking slot {current_time.time()}: {e}")
+                
+                # Move to next 30-minute slot
+                current_time += timedelta(minutes=30)
+            
+            logger.info(f"SHEETS DEBUG: Found {len(reserved_slots)} occupied slots from Google Sheets for {specialist_name}: {reserved_slots}")
+            return reserved_slots
+            
+        except Exception as e:
+            logger.error(f"Error reading reserved slots from sheets for {specialist_name}: {e}")
+            return []
+    
+    def _has_content(self, cell_value):
+        """Check if cell has any meaningful content"""
+        if cell_value is None:
+            return False
+        # Convert to string and strip whitespace
+        str_value = str(cell_value).strip()
+        # Check if not empty and not just whitespace
+        return len(str_value) > 0
     
     def _get_available_slots_for_specialist_in_time_range(
         self, 
