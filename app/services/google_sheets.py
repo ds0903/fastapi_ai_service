@@ -634,6 +634,8 @@ class GoogleSheetsService:
             logger.error(f"Error reading reserved slots from sheets for {specialist_name}: {e}")
             return []
     
+
+    
     def _has_content(self, cell_value):
         """Check if cell has any meaningful content"""
         if cell_value is None:
