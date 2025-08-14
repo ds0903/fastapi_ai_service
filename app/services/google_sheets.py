@@ -437,12 +437,16 @@ class GoogleSheetsService:
         current_time = datetime.combine(target_date, work_start)
         end_time = datetime.combine(target_date, work_end)
         
-        while current_time + timedelta(minutes=30 * time_fraction) <= end_time:
+        # Safety check: if time_fraction is 0 (unknown service), use minimum 1 slot for availability check
+        effective_time_fraction = max(1, time_fraction)
+        logger.debug(f"Using effective_time_fraction={effective_time_fraction} (original time_fraction={time_fraction})")
+        
+        while current_time + timedelta(minutes=30 * effective_time_fraction) <= end_time:
             slot_time = current_time.time()
             
             # Check if this slot and required consecutive slots are free
             is_available = True
-            for i in range(time_fraction):
+            for i in range(effective_time_fraction):
                 check_time = (current_time + timedelta(minutes=30*i)).time()
                 if check_time in occupied_slots:
                     is_available = False
@@ -553,12 +557,15 @@ class GoogleSheetsService:
         current_time = datetime.combine(target_date, work_start)
         end_datetime = datetime.combine(target_date, work_end)
         
-        while current_time + timedelta(minutes=30 * time_fraction) <= end_datetime:
+        # Safety check: if time_fraction is 0 (unknown service), use minimum 1 slot for availability check
+        effective_time_fraction = max(1, time_fraction)
+        
+        while current_time + timedelta(minutes=30 * effective_time_fraction) <= end_datetime:
             slot_time = current_time.time()
             
             # Check if this slot and required consecutive slots are free
             is_available = True
-            for i in range(time_fraction):
+            for i in range(effective_time_fraction):
                 check_time = (current_time + timedelta(minutes=30*i)).time()
                 if check_time in occupied_slots:
                     is_available = False
