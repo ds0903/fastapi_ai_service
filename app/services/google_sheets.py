@@ -304,8 +304,14 @@ class GoogleSheetsService:
             all_work_slots = self._get_all_work_slots_for_specialist(target_date, time_fraction)
             logger.info(f"ALL WORK SLOTS: Generated {len(all_work_slots)} total work slots for {specialist}")
             
-            # Filter out slots that are reserved in Google Sheets (PRIMARY source of truth)
-            slots = [slot for slot in all_work_slots if slot not in sheets_reserved]
+            # CRITICAL FIX: Filter slots considering time_fraction requirements
+            # For time_fraction > 1, a slot is only available if all consecutive slots are free
+            available_slots_list = []
+            for slot in all_work_slots:
+                if self._is_slot_available_with_time_fraction(slot, sheets_reserved, time_fraction):
+                    available_slots_list.append(slot)
+            
+            slots = available_slots_list
             
             available_slots[f"available_slots_{specialist.lower()}"] = slots
             logger.info(f"Specialist {specialist} has {len(all_work_slots)} total work slots, {len(sheets_reserved)} reserved in sheets, final available: {len(slots)} slots")
@@ -588,37 +594,38 @@ class GoogleSheetsService:
                 logger.warning(f"Worksheet not found for specialist {specialist_name}")
                 return []
             
-            # Get work hours
-            work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
-            work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
-            
             reserved_slots = []
-            current_time = datetime.combine(target_date, work_start)
             
-            # Check each 30-minute slot
-            while current_time.time() <= work_end:
-                try:
-                    # Find the row for this time slot
-                    target_row = self._find_row_for_time_slot(worksheet, target_date, current_time.time())
-                    
-                    if target_row:
-                        # Check if ANY booking columns (D, E, F, G) have content
-                        client_id_cell = worksheet.cell(target_row, 4).value  # Column D
-                        client_name_cell = worksheet.cell(target_row, 5).value  # Column E  
-                        service_cell = worksheet.cell(target_row, 6).value  # Column F
-                        phone_cell = worksheet.cell(target_row, 7).value  # Column G
+            # CRITICAL FIX: Use batch reading to avoid quota limits
+            # Get all data at once instead of cell-by-cell
+            try:
+                # Read all values in one batch call
+                all_values = worksheet.get_all_values()
+                logger.debug(f"Successfully retrieved {len(all_values)} rows from worksheet in batch")
+                
+                target_date_str = target_date.strftime("%d.%m.%Y")
+                
+                # Process the data in memory instead of making individual API calls
+                for row_idx, row in enumerate(all_values[1:], start=2):  # Skip header row
+                    if len(row) >= 7:  # Ensure we have all columns (A-G)
+                        date_val = row[1] if len(row) > 1 else ""  # Column B (full date)
+                        time_val = row[2] if len(row) > 2 else ""  # Column C (time)
+                        client_id = row[3] if len(row) > 3 else ""  # Column D
+                        client_name = row[4] if len(row) > 4 else ""  # Column E
+                        service = row[5] if len(row) > 5 else ""  # Column F
+                        phone = row[6] if len(row) > 6 else ""  # Column G
                         
-                        # If any cell has content, this slot is occupied
-                        if any(self._has_content(cell) for cell in [client_id_cell, client_name_cell, service_cell, phone_cell]):
-                            slot_time = current_time.time().strftime('%H:%M')
-                            reserved_slots.append(slot_time)
-                            logger.debug(f"Found occupied slot in sheets: {slot_time} (client_id: {client_id_cell})")
+                        # Check if this row is for our target date
+                        if date_val == target_date_str and time_val:
+                            # Check if any booking column has content
+                            if any(self._has_content(cell) for cell in [client_id, client_name, service, phone]):
+                                reserved_slots.append(time_val)
+                                logger.debug(f"Found occupied slot in sheets: {time_val} (client_id: {client_id})")
                 
-                except Exception as e:
-                    logger.debug(f"Error checking slot {current_time.time()}: {e}")
-                
-                # Move to next 30-minute slot
-                current_time += timedelta(minutes=30)
+            except Exception as batch_error:
+                logger.error(f"Error in batch reading for {specialist_name}: {batch_error}")
+                # Fall back to empty list to prevent blocking
+                return []
             
             logger.info(f"SHEETS DEBUG: Found {len(reserved_slots)} occupied slots from Google Sheets for {specialist_name}: {reserved_slots}")
             return reserved_slots
@@ -635,6 +642,24 @@ class GoogleSheetsService:
         str_value = str(cell_value).strip()
         # Check if not empty and not just whitespace
         return len(str_value) > 0
+    
+    def _is_slot_available_with_time_fraction(self, slot_time: str, reserved_slots: List[str], time_fraction: int) -> bool:
+        """Check if a slot is available considering the time fraction (service duration)"""
+        if time_fraction <= 1:
+            # For 30-minute services, just check if the slot is not reserved
+            return slot_time not in reserved_slots
+        
+        # For longer services, check if all consecutive slots are available
+        try:
+            slot_datetime = datetime.strptime(slot_time, "%H:%M")
+            for i in range(time_fraction):
+                check_time = (slot_datetime + timedelta(minutes=30 * i)).strftime("%H:%M")
+                if check_time in reserved_slots:
+                    return False
+            return True
+        except Exception as e:
+            logger.error(f"Error checking slot availability with time fraction: {e}")
+            return False
     
     def _get_available_slots_for_specialist_in_time_range(
         self, 
@@ -983,18 +1008,21 @@ class GoogleSheetsService:
     def _find_row_for_time_slot(self, worksheet, target_date: date, target_time: time) -> Optional[int]:
         """Find the row number for a specific date and time slot"""
         try:
-            # Get all data from columns B and C (full date and time)
-            date_column = worksheet.col_values(2)  # Column B: DD.MM.YYYY
-            time_column = worksheet.col_values(3)  # Column C: HH:MM
+            # CRITICAL FIX: Use get_all_values() instead of col_values() to reduce API calls
+            all_values = worksheet.get_all_values()
             
             target_date_str = target_date.strftime("%d.%m.%Y")
             target_time_str = target_time.strftime("%H:%M")
             
             # Find matching row (starting from row 2, since row 1 is headers)
-            for i, (date_val, time_val) in enumerate(zip(date_column[1:], time_column[1:]), start=2):
-                if date_val == target_date_str and time_val == target_time_str:
-                    logger.debug(f"Found matching slot at row {i}: {date_val} {time_val}")
-                    return i
+            for i, row in enumerate(all_values[1:], start=2):
+                if len(row) >= 3:  # Ensure we have columns B and C
+                    date_val = row[1] if len(row) > 1 else ""  # Column B: DD.MM.YYYY
+                    time_val = row[2] if len(row) > 2 else ""  # Column C: HH:MM
+                    
+                    if date_val == target_date_str and time_val == target_time_str:
+                        logger.debug(f"Found matching slot at row {i}: {date_val} {time_val}")
+                        return i
             
             logger.warning(f"No matching row found for {target_date_str} {target_time_str}")
             return None

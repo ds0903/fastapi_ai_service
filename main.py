@@ -171,6 +171,10 @@ async def lifespan(app: FastAPI):
             default_project_config = local_config["default"]
             default_config.specialists = default_project_config.get("specialists", ["Арина", "Эдуард", "Инна", "Жанна"])
             default_config.services = default_project_config.get("services", {})
+            default_config.work_hours = default_project_config.get("work_hours", {
+                "start": settings.default_work_start_time,
+                "end": settings.default_work_end_time
+            })
         else:
             logger.warning("No 'default' configuration found in local config, using hardcoded defaults")
             default_config.specialists = ["Арина", "Эдуард", "Инна", "Жанна"]
@@ -184,6 +188,7 @@ async def lifespan(app: FastAPI):
                 project_config = ProjectConfig(project_id)
                 project_config.specialists = project_data.get("specialists", default_config.specialists)
                 project_config.services = project_data.get("services", default_config.services)
+                project_config.work_hours = project_data.get("work_hours", default_config.work_hours)
                 project_configs[project_id] = project_config
                 logger.info(f"Loaded configuration for project '{project_id}'")
         
