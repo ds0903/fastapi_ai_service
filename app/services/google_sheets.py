@@ -267,17 +267,18 @@ class GoogleSheetsService:
         ).all()
         logger.debug(f"Found {len(bookings)} active bookings for date {target_date}")
         
-        # Debug: Log all bookings found
+        # Debug: Log all bookings found (using INFO level to ensure visibility)
+        logger.info(f"BOOKING DEBUG: Found {len(bookings)} active bookings for project '{self.project_config.project_id}' on {target_date}")
         for booking in bookings:
-            logger.debug(f"Booking found: {booking.specialist_name} at {booking.appointment_time} for {booking.duration_minutes} minutes (client: {booking.client_id})")
+            logger.info(f"BOOKING DEBUG: {booking.specialist_name} at {booking.appointment_time} for {booking.duration_minutes}min (client: {booking.client_id}, status: {booking.status})")
             
         # Debug: Also check what's actually in the database for this date
         all_bookings_for_date = db.query(Booking).filter(
             Booking.appointment_date == target_date
         ).all()
-        logger.debug(f"Total bookings in DB for {target_date} (all projects/statuses): {len(all_bookings_for_date)}")
+        logger.info(f"BOOKING DEBUG: Total bookings in DB for {target_date} (all projects/statuses): {len(all_bookings_for_date)}")
         for booking in all_bookings_for_date:
-            logger.debug(f"  - {booking.project_id}/{booking.status}: {booking.specialist_name} at {booking.appointment_time} (client: {booking.client_id})")
+            logger.info(f"BOOKING DEBUG: {booking.project_id}/{booking.status}: {booking.specialist_name} at {booking.appointment_time} (client: {booking.client_id})")
         
         # Group bookings by specialist
         bookings_by_specialist = {}
@@ -289,7 +290,8 @@ class GoogleSheetsService:
         # Generate available slots for each specialist
         available_slots = {}
         
-        logger.debug(f"Project specialists: {self.project_config.specialists}")
+        logger.info(f"PROJECT CONFIG DEBUG: Project specialists: {self.project_config.specialists}")
+        logger.info(f"PROJECT CONFIG DEBUG: Project ID: '{self.project_config.project_id}'")
         for specialist in self.project_config.specialists:
             specialist_bookings = bookings_by_specialist.get(specialist, [])
             logger.debug(f"Specialist {specialist} has {len(specialist_bookings)} bookings for date {target_date}")
@@ -480,7 +482,7 @@ class GoogleSheetsService:
                 slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
         
-        logger.debug(f"Found {len(occupied_slots)} occupied slots from {len(bookings)} bookings: {sorted([slot.strftime('%H:%M') for slot in occupied_slots])}")
+        logger.info(f"RESERVED SLOTS DEBUG: Found {len(occupied_slots)} occupied slots from {len(bookings)} bookings: {sorted([slot.strftime('%H:%M') for slot in occupied_slots])}")
         
         # Add edge slots that would make booking impossible with current time_fraction
         reserved_slots = set()
