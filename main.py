@@ -554,10 +554,14 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             logger.error(f"Message ID: {message_id} - Error in parallel slot fetching for client_id={client_id}: {results[1]}")
                         elif slots:
                             available_slots = slots.slots_by_specialist
+                            reserved_slots = slots.reserved_slots_by_specialist or {}
                             slots_target_date = slots.target_date
                             logger.info(f"Message ID: {message_id} - Found available slots in parallel for target date {slots_target_date}: {len(available_slots)} specialists")
                             for specialist, specialist_slots in available_slots.items():
                                 logger.info(f"Message ID: {message_id} - Specialist {specialist}: {len(specialist_slots)} available slots: {specialist_slots}")
+                            logger.info(f"Message ID: {message_id} - Found reserved slots for {len(reserved_slots)} specialists")
+                            for specialist, specialist_reserved in reserved_slots.items():
+                                logger.info(f"Message ID: {message_id} - Specialist {specialist}: {len(specialist_reserved)} reserved slots: {specialist_reserved}")
                             logger.info(f"Message ID: {message_id} - IMPORTANT: These slots are FOR DATE: {slots_target_date}, checked on: {slots.date_of_checking}")
                         else:
                             logger.warning(f"Message ID: {message_id} - No available slots returned from slot fetching task")
@@ -593,6 +597,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             if target_date:
                                 slots = await sheets_service.get_available_slots_async(db, target_date, service_result.time_fraction)
                                 available_slots = slots.slots_by_specialist
+                                reserved_slots = slots.reserved_slots_by_specialist or {}
                                 slots_target_date = slots.target_date
                                 logger.info(f"Message ID: {message_id} - Refetched slots for target date {slots_target_date} with time_fraction {service_result.time_fraction}")
                         elif intent_result.desire_time0 and intent_result.desire_time1:
@@ -603,6 +608,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                                     db, start_time, end_time, service_result.time_fraction
                                 )
                                 available_slots = slots.slots_by_specialist
+                                reserved_slots = slots.reserved_slots_by_specialist or {}
                                 slots_target_date = slots.target_date
                                 logger.info(f"Message ID: {message_id} - Refetched time range slots for target date {slots_target_date} with time_fraction {service_result.time_fraction}")
                     except Exception as e:

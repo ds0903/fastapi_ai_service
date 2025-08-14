@@ -60,6 +60,7 @@ class AvailableSlots(BaseModel):
     date_of_checking: str  # The date these slots are for (DD.MM format)
     target_date: str  # The target date being searched (DD.MM format) 
     slots_by_specialist: Dict[str, List[str]]
+    reserved_slots_by_specialist: Optional[Dict[str, List[str]]] = Field(default_factory=dict)
 
 
 class ClaudeMainResponse(BaseModel):

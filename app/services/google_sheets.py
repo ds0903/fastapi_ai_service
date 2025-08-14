@@ -287,10 +287,21 @@ class GoogleSheetsService:
             available_slots[f"available_slots_{specialist.lower()}"] = slots
             logger.debug(f"Specialist {specialist} has {len(slots)} available slots: {slots}")
         
+        # Generate reserved slots for each specialist
+        reserved_slots = {}
+        for specialist in self.project_config.specialists:
+            specialist_bookings = bookings_by_specialist.get(specialist, [])
+            slots = self._get_reserved_slots_for_specialist(
+                specialist_bookings, target_date, time_fraction
+            )
+            reserved_slots[f"reserved_slots_{specialist.lower()}"] = slots
+            logger.debug(f"Specialist {specialist} has {len(slots)} reserved slots: {slots}")
+
         result = AvailableSlots(
             date_of_checking=date.today().strftime("%d.%m"), # When the check was performed
             target_date=target_date.strftime("%d.%m"),       # The date these slots are FOR
-            slots_by_specialist=available_slots
+            slots_by_specialist=available_slots,
+            reserved_slots_by_specialist=reserved_slots
         )
         logger.info(f"Returning available slots for {target_date}: {len(available_slots)} specialists with total slots")
         return result
@@ -367,10 +378,13 @@ class GoogleSheetsService:
         for specialist_key, slots in all_slots.items():
             formatted_slots[specialist_key] = slots
         
+        # For time range searches, we don't generate reserved_slots as it's complex across multiple dates
+        # This should be handled differently if needed
         return AvailableSlots(
             date_of_checking=date.today().strftime("%d.%m"),
             target_date="multiple_dates",  # For time range searches
-            slots_by_specialist=formatted_slots
+            slots_by_specialist=formatted_slots,
+            reserved_slots_by_specialist={}
         )
     
     def _get_available_slots_for_specialist(
@@ -416,6 +430,64 @@ class GoogleSheetsService:
         
         logger.debug(f"Generated {len(available_slots)} available slots for {target_date}: {available_slots}")
         return available_slots
+    
+    def _get_reserved_slots_for_specialist(
+        self, 
+        bookings: List[Booking], 
+        target_date: date, 
+        time_fraction: int
+    ) -> List[str]:
+        """Get reserved/occupied slots for a specific specialist on a specific date"""
+        work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
+        work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
+        logger.debug(f"Calculating reserved slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
+        
+        # Create set of occupied time slots from bookings
+        occupied_slots = set()
+        for booking in bookings:
+            booking_time = datetime.combine(target_date, booking.appointment_time)
+            booking_duration_slots = booking.duration_minutes // 30
+            for i in range(booking_duration_slots):
+                slot_time = (booking_time + timedelta(minutes=30*i)).time()
+                occupied_slots.add(slot_time)
+        
+        # Add edge slots that would make booking impossible with current time_fraction
+        reserved_slots = set()
+        
+        # All occupied slots are reserved
+        reserved_slots.update(occupied_slots)
+        
+        # Add slots that are too close to end of work day for the required duration
+        current_time = datetime.combine(target_date, work_start)
+        end_time = datetime.combine(target_date, work_end)
+        
+        while current_time < end_time:
+            slot_time = current_time.time()
+            
+            # Check if this slot would extend beyond work hours with current time_fraction
+            if current_time + timedelta(minutes=30 * time_fraction) > end_time:
+                reserved_slots.add(slot_time)
+            
+            # Check if starting at this slot would conflict with existing bookings
+            for i in range(time_fraction):
+                check_time = (current_time + timedelta(minutes=30*i)).time()
+                if check_time in occupied_slots:
+                    # This slot would conflict, so all slots that would include this occupied slot are reserved
+                    for j in range(time_fraction):
+                        conflict_start = current_time - timedelta(minutes=30*j)
+                        if conflict_start.time() >= work_start and conflict_start < current_time + timedelta(minutes=30):
+                            reserved_slots.add(conflict_start.time())
+                    break
+            
+            current_time += timedelta(minutes=30)
+        
+        # Convert to sorted list of time strings
+        reserved_slots_list = []
+        for slot in sorted(reserved_slots):
+            reserved_slots_list.append(slot.strftime("%H:%M"))
+        
+        logger.debug(f"Generated {len(reserved_slots_list)} reserved slots for {target_date}: {reserved_slots_list}")
+        return reserved_slots_list
     
     def _get_available_slots_for_specialist_in_time_range(
         self, 
