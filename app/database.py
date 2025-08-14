@@ -1,7 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Date, Time, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 import uuid
 from typing import Generator
@@ -77,6 +76,8 @@ class ClientLastActivity(Base):
     project_id = Column(String, ForeignKey("projects.project_id"), nullable=False)
     client_id = Column(String, nullable=False, index=True)
     last_message_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    zip_history = Column(Text, nullable=True)  # Compressed dialogue history
+    last_compression_at = Column(DateTime, nullable=True)  # When last compression happened
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

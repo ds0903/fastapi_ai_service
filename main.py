@@ -208,12 +208,25 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("Default project already exists in database")
         
+        # Start dialogue compression background task
+        from app.services.dialogue_archiving import run_dialogue_compression_task
+        compression_task = asyncio.create_task(run_dialogue_compression_task(project_configs))
+        logger.info("Started dialogue compression background task")
+        
     finally:
         db.close()
     
     yield
     
     # Cleanup
+    logger.info("Shutting down dialogue compression task...")
+    if 'compression_task' in locals():
+        compression_task.cancel()
+        try:
+            await compression_task
+        except asyncio.CancelledError:
+            logger.info("Dialogue compression task cancelled successfully")
+    
     project_configs.clear()
 
 
@@ -461,9 +474,15 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             logger.debug(f"Message ID: {message_id} - Updating message status to processing for message_id={message_item.id}")
             queue_service.update_message_status(message_item.id, MessageStatus.PROCESSING, message_id)
             
-            # Get dialogue history
+            # Get dialogue history and zip_history
             logger.debug(f"Message ID: {message_id} - Getting dialogue history for client_id={client_id}")
             dialogue_history = get_dialogue_history(db, project_id, client_id, message_id)
+            
+            # Get compressed dialogue history (zip_history)
+            from app.services.dialogue_archiving import DialogueArchivingService
+            dialogue_service = DialogueArchivingService()
+            zip_history = dialogue_service.get_zip_history(db, project_id, client_id)
+            logger.debug(f"Message ID: {message_id} - Got zip_history for client_id={client_id}: {len(zip_history) if zip_history else 0} characters")
             
             # Step 1: Intent detection (async)
             logger.info(f"Message ID: {message_id} - Starting intent detection for client_id={client_id}")
@@ -472,7 +491,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     project_config,
                     dialogue_history,
                     message_item.aggregated_message,
-                    message_id
+                    message_id,
+                    zip_history
                 )
                 logger.debug(f"Message ID: {message_id} - Intent detection result for client_id={client_id}: waiting={intent_result.waiting}, date_order={intent_result.date_order}")
             except Exception as e:
@@ -502,7 +522,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     project_config,
                     dialogue_history,
                     message_item.aggregated_message,
-                    message_id
+                    message_id,
+                    zip_history
                 )
                 tasks.append(service_task)
                 
@@ -651,7 +672,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     reserved_slots,
                     client_bookings,
                     message_id,
-                    slots_target_date  # Pass the target date information
+                    slots_target_date,  # Pass the target date information
+                    zip_history  # Pass compressed dialogue history
                 )
                 logger.debug(f"Message ID: {message_id} - Main response generated for client_id={client_id}: activate_booking={main_response.activate_booking}, reject_order={main_response.reject_order}, change_order={main_response.change_order}")
             except Exception as e:
@@ -760,49 +782,27 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
 
 
 def get_dialogue_history(db: Session, project_id: str, client_id: str, message_id: str) -> str:
-    """Get dialogue history for a client"""
-    from app.database import Dialogue
-    from sqlalchemy import desc
+    """Get recent dialogue history (last 24 hours) for a client"""
+    from app.services.dialogue_archiving import DialogueArchivingService
     
-    logger.debug(f"Message ID: {message_id} - Getting dialogue history for client_id={client_id}, project_id={project_id}")
+    logger.debug(f"Message ID: {message_id} - Getting recent dialogue history for client_id={client_id}, project_id={project_id}")
     
-    dialogues = db.query(Dialogue).filter(
-        and_(
-            Dialogue.project_id == project_id,
-            Dialogue.client_id == client_id,
-            Dialogue.is_archived.is_(False)
-        )
-    ).order_by(desc(Dialogue.timestamp)).limit(50).all()
+    dialogue_service = DialogueArchivingService()
+    recent_history = dialogue_service.get_recent_dialogue_history(db, project_id, client_id)
     
-    logger.debug(f"Message ID: {message_id} - Found {len(dialogues)} dialogue entries for client_id={client_id}")
+    logger.debug(f"Message ID: {message_id} - Built recent dialogue history for client_id={client_id}: {len(recent_history)} characters")
     
-    history_lines = []
-    for dialogue in reversed(dialogues):
-        role = "Клиент" if dialogue.role == "client" else "Бот"
-        history_lines.append(f"{role}: {dialogue.message}")
-    
-    history_text = "\n".join(history_lines)
-    logger.debug(f"Message ID: {message_id} - Built dialogue history for client_id={client_id}: {len(history_text)} characters")
-    
-    return history_text
+    return recent_history
 
 
 def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: str, role: str, message_id: str):
-    """Save a dialogue entry"""
-    from app.database import Dialogue
+    """Save a dialogue entry using the new dialogue management system"""
+    from app.services.dialogue_archiving import DialogueArchivingService
     
     logger.debug(f"Message ID: {message_id} - Saving dialogue entry: client_id={client_id}, role={role}, message_length={len(message)}")
     
-    dialogue = Dialogue(
-        project_id=project_id,
-        client_id=client_id,
-        role=role,
-        message=message,
-        timestamp=datetime.utcnow()
-    )
-    
-    db.add(dialogue)
-    db.commit()
+    dialogue_service = DialogueArchivingService()
+    dialogue_service.add_dialogue_entry(db, project_id, client_id, role, message)
     
     logger.debug(f"Message ID: {message_id} - Dialogue entry saved successfully for client_id={client_id}, role={role}")
 

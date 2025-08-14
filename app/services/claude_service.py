@@ -206,7 +206,8 @@ class ClaudeService:
         project_config: ProjectConfig,
         dialogue_history: str,
         current_message: str,
-        message_id: str
+        message_id: str,
+        zip_history: Optional[str] = None
     ) -> IntentDetectionResult:
         """
         Module 1: Intent detection
@@ -216,9 +217,10 @@ class ClaudeService:
         logger.debug(f"Message ID: {message_id} - Message for intent detection: '{current_message[:100]}...'")
         
         prompt = self._build_intent_detection_prompt(
-            project_config, 
-            dialogue_history, 
-            current_message
+            project_config,
+            dialogue_history,
+            current_message,
+            zip_history
         )
         
         logger.info(f"Message ID: {message_id} - Built intent detection prompt, length: {len(prompt)} characters")
@@ -263,7 +265,8 @@ class ClaudeService:
         project_config: ProjectConfig,
         dialogue_history: str,
         current_message: str,
-        message_id: str
+        message_id: str,
+        zip_history: Optional[str] = None
     ) -> ServiceIdentificationResult:
         """
         Module 2: Service identification
@@ -275,7 +278,8 @@ class ClaudeService:
         prompt = self._build_service_identification_prompt(
             project_config,
             dialogue_history,
-            current_message
+            current_message,
+            zip_history
         )
         
         logger.debug(f"Message ID: {message_id} - Built service identification prompt, length: {len(prompt)} characters")
@@ -430,17 +434,20 @@ class ClaudeService:
         self,
         project_config: ProjectConfig,
         dialogue_history: str,
-        current_message: str
+        current_message: str,
+        zip_history: Optional[str] = None
     ) -> str:
         """Build prompt for intent detection"""
         base_prompt = get_prompt("intent_detection")
         current_date = datetime.now().strftime("%d.%m.%Y")
         
+        zip_history_section = f"\nzip_history: {zip_history}" if zip_history else ""
+        
         return f"""
         {base_prompt}
         
         current_date: {current_date}
-        dialogue_history: {dialogue_history}
+        dialogue_history: {dialogue_history}{zip_history_section}
         current_message: {current_message}
         """
     
@@ -448,7 +455,8 @@ class ClaudeService:
         self,
         project_config: ProjectConfig,
         dialogue_history: str,
-        current_message: str
+        current_message: str,
+        zip_history: Optional[str] = None
     ) -> str:
         """Build prompt for service identification"""
         base_prompt = get_prompt("service_identification")
@@ -465,10 +473,12 @@ class ClaudeService:
             base_prompt = re.sub(pattern, f'СЛОВАРЬ УСЛУГ:\n{services_dict}', base_prompt, flags=re.DOTALL)
             logger.debug("Replaced hardcoded services with project-specific services in service identification prompt")
         
+        zip_history_section = f"\nzip_history: {zip_history}" if zip_history else ""
+        
         return f"""
         {base_prompt}
         
-        dialogue_history: {dialogue_history}
+        dialogue_history: {dialogue_history}{zip_history_section}
         current_message: {current_message}
         """
     
@@ -732,5 +742,5 @@ class ClaudeService:
             logger.error(f"Message ID: {message_id} - Failed to parse main response JSON: {e}")
             logger.warning(f"Message ID: {message_id} - Raw response was: '{response[:200]}...'")
             return {
-                "gpt_response": "Извините, произошла ошибка. Попробуйте еще раз.",
+                "gpt_response": "Извините, произошла ошибка. Попробуйте еще раз."
             } 
