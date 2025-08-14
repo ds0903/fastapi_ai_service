@@ -947,6 +947,34 @@ async def trigger_dialogue_compression(db: Session = Depends(get_db)):
         return {"error": str(e)}
 
 
+@app.post("/admin/reset-dialogues-archived")
+async def reset_dialogues_archived(db: Session = Depends(get_db)):
+    """Reset archived status of recent dialogues for testing"""
+    try:
+        from app.database import Dialogue
+        from datetime import datetime, timedelta
+        
+        # Reset dialogues from last 24 hours to unarchived for testing
+        cutoff_time = datetime.now() - timedelta(hours=24)
+        
+        updated_count = db.query(Dialogue).filter(
+            Dialogue.timestamp >= cutoff_time
+        ).update({Dialogue.is_archived: False})
+        
+        db.commit()
+        
+        logger.info(f"Reset {updated_count} dialogues to unarchived status")
+        
+        return {
+            "message": f"Reset {updated_count} dialogues to unarchived status",
+            "cutoff_time": cutoff_time.isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error resetting dialogue archived status: {e}")
+        db.rollback()
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=settings.host, port=settings.port) 

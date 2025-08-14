@@ -51,13 +51,17 @@ class DialogueArchivingService:
             logger.info(f"Found {len(clients_to_process)} clients with dialogues ready for compression")
             
             if not clients_to_process:
-                # Debug: Show recent dialogues if any exist
-                if unarchived_dialogues > 0:
-                    recent_dialogues = db.query(Dialogue).filter(not Dialogue.is_archived).order_by(Dialogue.timestamp.desc()).limit(5).all()
-                    logger.info("Recent dialogues in database:")
-                    for dlg in recent_dialogues:
-                        age_hours = (datetime.utcnow() - dlg.timestamp).total_seconds() / 3600
-                        logger.info(f"  - Client {dlg.client_id}, Project {dlg.project_id}, Age: {age_hours:.1f}h, Time: {dlg.timestamp}")
+                # Debug: Show recent dialogues regardless of archived status
+                recent_dialogues = db.query(Dialogue).order_by(Dialogue.timestamp.desc()).limit(10).all()
+                logger.info("Recent dialogues in database (all):")
+                for dlg in recent_dialogues:
+                    age_hours = (datetime.now() - dlg.timestamp).total_seconds() / 3600
+                    logger.info(f"  - Client {dlg.client_id}, Project {dlg.project_id}, Age: {age_hours:.1f}h, Time: {dlg.timestamp}, Archived: {dlg.is_archived}")
+                
+                # Check if we need to reset archived status for testing
+                if total_dialogues > 0 and unarchived_dialogues == 0:
+                    logger.warning("All dialogues are marked as archived! This might indicate a previous archiving run or data migration issue.")
+                    logger.info("For testing, you may want to reset some dialogues to unarchived status.")
                 
                 logger.info("No dialogues to compress at this time")
                 return
