@@ -28,9 +28,19 @@ class DialogueArchivingService:
         db = SessionLocal()
         
         try:
-            # Find all clients that have dialogues older than 24 hours that need compression
+            # Find all clients that have dialogues older than compression_hours that need compression
             cutoff_time = datetime.utcnow() - timedelta(hours=self.compression_hours)
-            logger.debug(f"Compressing dialogues older than {cutoff_time}")
+            logger.info(f"Compressing dialogues older than {cutoff_time} (cutoff: {self.compression_hours} hours ago)")
+            
+            # Debug: Check total dialogues in database
+            total_dialogues = db.query(Dialogue).count()
+            unarchived_dialogues = db.query(Dialogue).filter(not Dialogue.is_archived).count()
+            old_dialogues = db.query(Dialogue).filter(
+                Dialogue.timestamp < cutoff_time,
+                not Dialogue.is_archived
+            ).count()
+            
+            logger.info(f"Database stats: Total dialogues: {total_dialogues}, Unarchived: {unarchived_dialogues}, Old dialogues (>{self.compression_hours}h): {old_dialogues}")
             
             # Get all clients with old dialogues that need compression
             clients_to_process = db.query(Dialogue.project_id, Dialogue.client_id).filter(
@@ -41,6 +51,14 @@ class DialogueArchivingService:
             logger.info(f"Found {len(clients_to_process)} clients with dialogues ready for compression")
             
             if not clients_to_process:
+                # Debug: Show recent dialogues if any exist
+                if unarchived_dialogues > 0:
+                    recent_dialogues = db.query(Dialogue).filter(not Dialogue.is_archived).order_by(Dialogue.timestamp.desc()).limit(5).all()
+                    logger.info("Recent dialogues in database:")
+                    for dlg in recent_dialogues:
+                        age_hours = (datetime.utcnow() - dlg.timestamp).total_seconds() / 3600
+                        logger.info(f"  - Client {dlg.client_id}, Project {dlg.project_id}, Age: {age_hours:.1f}h, Time: {dlg.timestamp}")
+                
                 logger.info("No dialogues to compress at this time")
                 return
             

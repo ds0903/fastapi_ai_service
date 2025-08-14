@@ -924,6 +924,29 @@ async def get_project_config(project_id: str):
     return config.to_dict()
 
 
+@app.post("/admin/compress-dialogues")
+async def trigger_dialogue_compression(db: Session = Depends(get_db)):
+    """Manually trigger dialogue compression for testing"""
+    try:
+        from app.services.dialogue_archiving import DialogueArchivingService
+        
+        compression_service = DialogueArchivingService()
+        
+        # Run compression
+        await compression_service.compress_old_dialogues(project_configs)
+        
+        # Get stats
+        stats = compression_service.get_archiving_stats(db)
+        
+        return {
+            "message": "Dialogue compression triggered successfully",
+            "stats": stats
+        }
+    except Exception as e:
+        logger.error(f"Error triggering dialogue compression: {e}")
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=settings.host, port=settings.port) 
