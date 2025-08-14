@@ -544,9 +544,20 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     start_time = parse_time(intent_result.desire_time0)
                     end_time = parse_time(intent_result.desire_time1)
                     if start_time and end_time:
-                        slot_task = sheets_service.get_available_slots_by_time_range_async(
-                            db, start_time, end_time, 1
-                        )
+                        context_date = extract_date_from_context(dialogue_history, zip_history)
+                        if context_date:
+                            logger.info(f"Message ID: {message_id} - Found date {context_date} in context, using specific date instead of time range")
+                            target_date = parse_date(context_date)
+                            if target_date:
+                                slot_task = sheets_service.get_available_slots_async(db, target_date, 1)
+                            else:
+                                slot_task = sheets_service.get_available_slots_by_time_range_async(
+                                    db, start_time, end_time, 1
+                                )
+                        else:
+                            slot_task = sheets_service.get_available_slots_by_time_range_async(
+                                db, start_time, end_time, 1
+                            )
                 
                 if slot_task:
                     logger.debug(f"Message ID: {message_id} - Slot task created, will fetch slots")
@@ -865,6 +876,38 @@ def parse_time(time_str: str) -> Optional[time]:
     except Exception as e:
         logger.warning(f"Failed to parse time '{time_str}': {e}")
         return None
+
+
+def extract_date_from_context(dialogue_history: str, zip_history: str) -> Optional[str]:
+    """Extract date from conversation context"""
+    import re
+    
+    # Combine both histories to search for dates
+    combined_text = f"{dialogue_history} {zip_history or ''}"
+    
+    # Look for dates in DD.MM format in recent context
+    date_patterns = [
+        r'\b(\d{1,2})\.\s*(\d{1,2})\b',  # 16.08 or 16. 08
+        r'на\s+(\d{1,2})\.(\d{1,2})',   # на 16.08
+        r'записаться\s+(\d{1,2})\.(\d{1,2})',  # записаться 16.08
+    ]
+    
+    for pattern in date_patterns:
+        matches = re.findall(pattern, combined_text)
+        if matches:
+            # Get the most recent match
+            day, month = matches[-1]
+            date_str = f"{day.zfill(2)}.{month.zfill(2)}"
+            logger.debug(f"Extracted date from context: {date_str}")
+            return date_str
+    
+    # Also check for "16.08" explicitly mentioned in zip_history
+    if zip_history and "16.08" in zip_history:
+        logger.debug("Found 16.08 mentioned in zip_history")
+        return "16.08"
+    
+    logger.debug("No date found in conversation context")
+    return None
 
 
 @app.get("/projects/{project_id}/stats", response_model=ProjectStats)

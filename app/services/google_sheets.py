@@ -417,8 +417,13 @@ class GoogleSheetsService:
                     all_slots[specialist_key] = []
                 
                 specialist_bookings = bookings_by_specialist.get(specialist, [])
+                
+                # CRITICAL FIX: Get reserved slots from Google Sheets for this date
+                sheets_reserved = self._get_reserved_slots_from_sheets(specialist, check_date, time_fraction)
+                logger.debug(f"Google Sheets reserved slots for {specialist} on {check_date}: {sheets_reserved}")
+                
                 slots = self._get_available_slots_for_specialist_in_time_range(
-                    specialist_bookings, check_date, start_time, end_time, time_fraction
+                    specialist_bookings, check_date, start_time, end_time, time_fraction, sheets_reserved
                 )
                 
                 for slot in slots:
@@ -669,7 +674,8 @@ class GoogleSheetsService:
         target_date: date, 
         start_time: time, 
         end_time: time, 
-        time_fraction: int
+        time_fraction: int,
+        sheets_reserved: List[str] = None
     ) -> List[str]:
         """Get available slots for specialist within specific time range"""
         work_start = max(
@@ -681,7 +687,7 @@ class GoogleSheetsService:
             end_time
         )
         
-        # Create set of occupied time slots
+        # Create set of occupied time slots from database bookings
         occupied_slots = set()
         for booking in bookings:
             booking_time = datetime.combine(target_date, booking.appointment_time)
@@ -689,6 +695,15 @@ class GoogleSheetsService:
             for i in range(booking_duration_slots):
                 slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
+        
+        # CRITICAL FIX: Add Google Sheets reserved slots
+        if sheets_reserved:
+            for sheet_slot in sheets_reserved:
+                try:
+                    slot_time = datetime.strptime(sheet_slot, "%H:%M").time()
+                    occupied_slots.add(slot_time)
+                except ValueError:
+                    logger.warning(f"Invalid time format in sheets_reserved: {sheet_slot}")
         
         # Generate available slots within time range
         available_slots = []
@@ -701,15 +716,8 @@ class GoogleSheetsService:
         while current_time + timedelta(minutes=30 * effective_time_fraction) <= end_datetime:
             slot_time = current_time.time()
             
-            # Check if this slot and required consecutive slots are free
-            is_available = True
-            for i in range(effective_time_fraction):
-                check_time = (current_time + timedelta(minutes=30*i)).time()
-                if check_time in occupied_slots:
-                    is_available = False
-                    break
-            
-            if is_available:
+            # CRITICAL FIX: Use the time fraction checking method for consistency
+            if self._is_slot_available_with_time_fraction(slot_time.strftime("%H:%M"), [t.strftime("%H:%M") for t in occupied_slots], effective_time_fraction):
                 available_slots.append(slot_time.strftime("%H:%M"))
             
             current_time += timedelta(minutes=30)
