@@ -45,6 +45,10 @@ class ClaudeService:
             
             # Simple counter for load balancing
             self.request_counter = 0
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Claude clients: {e}")
+            raise
     
     async def _download_image_as_base64(self, url: str, message_id: str = None) -> Optional[dict]:
         """Download image from URL and convert to base64 format for Claude Vision API"""
@@ -73,10 +77,6 @@ class ClaudeService:
         except Exception as e:
             logger.error(f"Message ID: {message_id} - Failed to download image from {url}: {e}")
             return None
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Claude clients: {e}")
-            raise
     
     def _increment_counter(self) -> int:
         """Increment and return request counter for load balancing"""
