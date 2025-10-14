@@ -282,7 +282,6 @@ class ClaudeService:
         current_message: str,
         current_date: str,  # Добавлено
    	day_of_week: str,   # Добавлено
-        date_calendar: str,  # Добавлено
         message_id: str,
         zip_history: Optional[str] = None
     ) -> IntentDetectionResult:
@@ -301,7 +300,6 @@ class ClaudeService:
         user_prompt_parts = [
             f"current_date: {current_date}",
             f"day_of_week: {day_of_week}",  # Добавляем эту строку
-            f"date_calendar:\n{date_calendar}",  # Календарь на месяц
             f"dialogue_history: {dialogue_history}"
         ]
         
@@ -487,7 +485,6 @@ current_message: {current_message}"""
         current_message: str,
         current_date: str,
         day_of_week: str,
-        date_calendar: str,
         available_slots: Dict[str, Any],
         reserved_slots: Dict[str, Any],
         rows_of_owner: str,
@@ -514,7 +511,6 @@ current_message: {current_message}"""
             f"dialogue_history: {dialogue_history}",
             f"current_message: {current_message}",
             f"day_of_week: {day_of_week}",  # Добавляем эту строку
-            f"date_calendar:\n{date_calendar}",  # Календарь на месяц
             f"available_slots: {json.dumps(available_slots, ensure_ascii=False)}",
             f"reserved_slots: {json.dumps(reserved_slots, ensure_ascii=False)}",
             f"rows_of_owner: {rows_of_owner}"

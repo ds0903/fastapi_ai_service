@@ -1,0 +1,8 @@
+=== Конфигурация проекта anna-paris-8013 ===
+Дата создания слепка: Wed Oct  1 14:10:45 CEST 2025
+Порт: 8013
+База данных: anna_paris_8013
+Python версия: Command 'python' not found, did you mean:
+  command 'python3' from deb python3
+  command 'python' from deb python-is-python3
+Включены: dialogue_export, Make.com интеграция, slot_calculator

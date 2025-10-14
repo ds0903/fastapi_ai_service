@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
-from sqlalchemy import text, and_, func
+from sqlalchemy import and_, func
 from typing import Dict, Any, Optional
 from datetime import datetime, date, time, timedelta
 import asyncio
@@ -26,7 +26,6 @@ from app.models import (
     MessageStatus
 )
 from app.services.message_queue import MessageQueueService
-from app.utils.date_calendar import generate_calendar_for_claude
 from app.services.claude_service import ClaudeService
 from app.services.google_sheets import GoogleSheetsService
 from app.services.booking_service import BookingService
@@ -34,7 +33,6 @@ from app.services.booking_service import BookingService
 # Кеш для хранения данных pending подтверждений
 # Формат: {client_id: {"date": "...", "time": "...", "specialist": "...", "service": "...", "timestamp": ...}}
 pending_confirmations = {}
-booking_errors = {}  # Хранение ошибок записей по client_id
 
 logging.basicConfig(
     level=logging.INFO,
@@ -222,11 +220,6 @@ async def lifespan(app: FastAPI):
         from app.services.dialogue_archiving import run_dialogue_compression_task
         compression_task = asyncio.create_task(run_dialogue_compression_task(project_configs))
         logger.info("Started dialogue compression background task")
-        
-        # Start Google Sheets background sync
-        from app.services.sheets_sync import run_sheets_background_sync
-        sheets_task = asyncio.create_task(run_sheets_background_sync(project_configs["default"]))
-        logger.info("Started Google Sheets background sync (every 5 min)")
         
     finally:
         db.close()
@@ -623,7 +616,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             # Initialize services
             logger.debug(f"Message ID: {message_id} - Initializing services for client_id={client_id}")
             queue_service = MessageQueueService(db)
-            claude_service = ClaudeService(db, project_config.slot_duration_minutes)
+            claude_service = ClaudeService(db)
             sheets_service = GoogleSheetsService(project_config)
             booking_service = BookingService(db, project_config, contact_send_id=contact_send_id)
             
@@ -660,10 +653,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             berlin_tz = pytz.timezone('Europe/Berlin')
             berlin_now = datetime.now(berlin_tz)
             current_date = berlin_now.strftime("%d.%m.%Y %H:%M")
-            
-            # Генерируем календарь на месяц вперед для Claude
-            date_calendar = generate_calendar_for_claude(berlin_now, days_ahead=30)
-            logger.debug(f"Message ID: {message_id} - Generated calendar: {len(date_calendar)} characters")
             day_of_week = berlin_now.strftime("%A")  # Monday, Tuesday, etc.
 
             # Step 1: Intent detection (async)
@@ -675,7 +664,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     message_item.aggregated_message,
                     current_date,  # Добавляем
                     day_of_week,   # Добавляем
-                    date_calendar,  # Добавляем календарь
                     message_id, 
                     zip_history
                 )
@@ -839,7 +827,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     # Логгируем слоты ПОСЛЕ пересчета
                     for spec, slots in available_slots.items():
                         if isinstance(slots, list):
-                            logger.info(f"Message ID: {message_id} - AFTER RECALC: {spec} has {len(slots)} slots for {service_result.time_fraction*project_config.slot_duration_minutes}min service")
+                            logger.info(f"Message ID: {message_id} - AFTER RECALC: {spec} has {len(slots)} slots for {service_result.time_fraction*30}min service")
                             if len(slots) > 0:
                                 logger.debug(f"Message ID: {message_id} - {spec} available times: {', '.join(slots[:5])}{'...' if len(slots) > 5 else ''}")
                     
@@ -908,17 +896,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     logger.error(f"Message ID: {message_id} - Failed to check newbie status: {e}")
                     newbie_status = 1
                 
-                # Получаем ошибку предыдущей записи из БД
-                from app.database import BookingError
-                booking_error = db.query(BookingError).filter_by(client_id=client_id).first()
-                record_error = booking_error.error_message if booking_error else None
-                if record_error:
-                    logger.info(f"Message ID: {message_id} - Found previous booking error in DB for {client_id}: {record_error}")
-                    # Удаляем ошибку сразу после извлечения - она передается Claude только один раз
-                    db.delete(booking_error)
-                    db.commit()
-                    logger.info(f"Message ID: {message_id} - Deleted booking error from DB after extraction")
-                logger.info(f"Message ID: {message_id} - SENDING TO CLAUDE WITH record_error={record_error}")
                 # Existing call to generate_main_response
                 main_response = await claude_service.generate_main_response(
                     project_config,
@@ -926,7 +903,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     message_item.aggregated_message,
                     current_date.strftime("%d.%m.%Y %H:%M"),
                     day_of_week, 
-                    date_calendar,  # Добавляем календарь
                     available_slots,
                     reserved_slots,
                     client_bookings,
@@ -962,27 +938,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     booking_result = {"success": False, "message": "Ошибка при обработке бронирования"}
             else:
                 logger.debug(f"Message ID: {message_id} - No booking action required for client_id={client_id}")
-            # Сохраняем ошибки записей в БД
-            if booking_result and not booking_result.get("success"):
-                error_msg = booking_result.get("message", "")
-                if error_msg and error_msg not in ["", "None", "No booking action required"]:
-                    # Сохраняем в БД
-                    from app.database import BookingError
-                    existing_error = db.query(BookingError).filter_by(client_id=client_id).first()
-                    if existing_error:
-                        existing_error.error_message = error_msg
-                        existing_error.updated_at = datetime.utcnow()
-                    else:
-                        booking_error = BookingError(client_id=client_id, error_message=error_msg)
-                        db.add(booking_error)
-                    db.commit()
-                    logger.info(f"Message ID: {message_id} - Saved booking error to DB for {client_id}: {error_msg}")
-            elif booking_result and booking_result.get("success"):
-                # Удаляем ошибку из БД при успешной записи
-                from app.database import BookingError
-                db.query(BookingError).filter_by(client_id=client_id).delete()
-                db.commit()
-                logger.info(f"Message ID: {message_id} - Cleared booking error from DB for {client_id}") 
             # Обработка подтверждения/отклонения записи
             # Обработка подтверждения/отклонения записи
             if main_response.booking_confirmed or main_response.booking_declined:
@@ -1088,9 +1043,27 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 if booking_result.get("message") and booking_result["message"] not in [None, "", "None", "No booking action required"]:
                     final_response += f"\n\n{booking_result['message']}"
             elif booking_result.get("message") and booking_result["message"] not in [None, "", "None"]:
-                # final_response += f"\n\nОшибка: {booking_result['message']}"  # ЗАКОММЕНТИРОВАНО - не показываем ошибки пользователю
+                # Логируем ошибку в таблицу вместо показа пользователю
+                sheets_service = GoogleSheetsService(project_config)
+                try:
+                    error_data = {
+                        'client_id': client_id,
+                        'client_name': f'Client_{client_id}',
+                        'error_message': booking_result['message'],
+                        'error_type': 'booking_error',
+                        'message_id': message_id,
+                        'timestamp': datetime.now()
+                    }
+                    # Логируем ошибку в Google Sheets
+                    await sheets_service.log_error_to_sheets_async(error_data)
+                    logger.info(f"Message ID: {message_id} - Error logged to sheets: {booking_result['message']}")
+                    
+                    # Показываем пользователю нейтральное сообщение
+                    final_response += "\n\nЕсли у вас остались вопросы, я буду рад помочь!"
+                except Exception as log_error:
+                    logger.error(f"Message ID: {message_id} - Failed to log error to sheets: {log_error}")
+                    # В случае ошибки логирования, просто не добавляем ничего к ответу
             
-                pass  # Ничего не делаем с ошибкой
             logger.info(f"Message ID: {message_id} - Message processing completed for client_id={client_id} with {error_count} errors")
             
             # Return response data for webhook
@@ -1333,49 +1306,6 @@ async def trigger_dialogue_compression(db: Session = Depends(get_db)):
 
 
 @app.post("/admin/reset-dialogues-archived")
-
-@app.post("/webhook/sheets-update")
-async def sheets_webhook(request: Request):
-    """Webhook endpoint для получения обновлений от Google Sheets Apps Script"""
-    try:
-        data = await request.json()
-        logger.info(f"Sheets webhook received: {json.dumps(data, indent=2)}")
-        
-        db = SessionLocal()
-        try:
-            query = text("""
-                INSERT INTO sync_log (operation, source, data, status, created_at)
-                VALUES (:operation, :source, CAST(:data AS jsonb), :status, NOW())
-            """)
-            db.execute(query, {
-                "operation": "sheets_webhook_received",
-                "source": "google_sheets",
-                "data": json.dumps(data),
-                "status": "received"
-            })
-            db.commit()
-            
-            sheet_name = data.get("sheetName")
-            row = data.get("row")
-            column = data.get("column")
-            value = data.get("value")
-            
-            logger.info(f"Sheets update: {sheet_name}[{row},{column}] = {value}")
-            from app.services.sheets_sync import SheetsSyncService
-            sync_service = SheetsSyncService(db)
-            
-            slot_data = sync_service.parse_sheet_update(data)
-            if slot_data:
-                success = sync_service.update_specific_column(sheet_name, row, column, value)
-                if not success:
-                    logger.warning(f"Failed to update sheets_slot for {sheet_name}[{row},{column}]")
-            
-            return {"status": "success", "message": "Webhook received"}
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"Error processing sheets webhook: {e}")
-        return {"status": "error", "message": str(e)}
 async def reset_dialogues_archived(db: Session = Depends(get_db)):
     """Reset archived status of recent dialogues for testing"""
     try:

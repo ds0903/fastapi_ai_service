@@ -19,11 +19,11 @@ class GoogleSheetsService:
     
     def __init__(self, project_config: ProjectConfig):
         self.project_config = project_config
-        logger.debug(f"Initializing GoogleSheetsService for project {project_config.project_id}")
+        logger.info(f"Initializing GoogleSheetsService for project {project_config.project_id}")
         
         try:
             self.client = self._get_sheets_client()
-            logger.debug("Google Sheets client initialized successfully")
+            logger.info("Google Sheets client initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Google Sheets client: {e}")
             self.client = None
@@ -32,7 +32,7 @@ class GoogleSheetsService:
         
         if self.client and project_config.google_sheet_id:
             try:
-                logger.debug(f"Opening spreadsheet: {project_config.google_sheet_id}")
+                logger.info(f"Opening spreadsheet: {project_config.google_sheet_id}")
                 self.spreadsheet = self.client.open_by_key(project_config.google_sheet_id)
                 logger.info(f"Successfully connected to Google Spreadsheet: {self.spreadsheet.title}")
             except Exception as e:
@@ -45,7 +45,7 @@ class GoogleSheetsService:
     
     def _get_sheets_client(self) -> gspread.Client:
         """Initialize Google Sheets client"""
-        logger.debug(f"Loading Google credentials from: {settings.google_credentials_file}")
+        logger.info(f"Loading Google credentials from: {settings.google_credentials_file}")
         
         try:
             credentials = Credentials.from_service_account_file(
@@ -53,7 +53,7 @@ class GoogleSheetsService:
                 scopes=settings.google_sheets_scopes
             )
             client = gspread.authorize(credentials)
-            logger.debug("Google Sheets client authorized successfully")
+            logger.info("Google Sheets client authorized successfully")
             return client
         except Exception as e:
             logger.error(f"Failed to create Google Sheets client: {e}")
@@ -93,7 +93,7 @@ class GoogleSheetsService:
             logger.info(f"Found {len(bookings)} active bookings to sync")
             
             if not bookings:
-                logger.debug("No active bookings to sync")
+                logger.info("No active bookings to sync")
                 return True
             
             # Group bookings by specialist
@@ -103,15 +103,15 @@ class GoogleSheetsService:
                     bookings_by_specialist[booking.specialist_name] = []
                 bookings_by_specialist[booking.specialist_name].append(booking)
             
-            logger.debug(f"Bookings grouped by specialist: {list(bookings_by_specialist.keys())}")
+            logger.info(f"Bookings grouped by specialist: {list(bookings_by_specialist.keys())}")
             
             # Update each specialist's worksheet
             sync_success = True
             for specialist_name, specialist_bookings in bookings_by_specialist.items():
                 try:
-                    logger.debug(f"Syncing {len(specialist_bookings)} bookings for specialist: {specialist_name}")
+                    logger.info(f"Syncing {len(specialist_bookings)} bookings for specialist: {specialist_name}")
                     self._update_specialist_worksheet(specialist_name, specialist_bookings)
-                    logger.debug(f"Successfully synced bookings for specialist: {specialist_name}")
+                    logger.info(f"Successfully synced bookings for specialist: {specialist_name}")
                 except Exception as specialist_error:
                     logger.error(f"Failed to sync bookings for specialist {specialist_name}: {specialist_error}")
                     sync_success = False
@@ -212,20 +212,20 @@ class GoogleSheetsService:
                     ]
                     
                     # Fill additional slots for multi-slot bookings
-                    booking_duration_slots = booking.duration_minutes // self.project_config.slot_duration_minutes
+                    booking_duration_slots = booking.duration_minutes // 30
                     for i in range(booking_duration_slots):
                         if i == 0:
                             worksheet.update(f'A{row}:F{row}', [row_data])
                         else:
                             # Fill subsequent slots with dashes
                             dash_row = ["", current_date.strftime("%d.%m.%Y"), 
-                                       (current_time + timedelta(minutes=self.project_config.slot_duration_minutes*i)).strftime("%H:%M"),
+                                       (current_time + timedelta(minutes=30*i)).strftime("%H:%M"),
                                        "-", "-", "-"]
                             worksheet.update(f'A{row}:F{row}', [dash_row])
                         row += 1
                     
                     # Skip the additional slots in the loop
-                    current_time += timedelta(minutes=self.project_config.slot_duration_minutes* booking_duration_slots)
+                    current_time += timedelta(minutes=30 * booking_duration_slots)
                 else:
                     # Empty slot
                     row_data = [
@@ -238,7 +238,7 @@ class GoogleSheetsService:
                     ]
                     worksheet.update(f'A{row}:F{row}', [row_data])
                     row += 1
-                    current_time += timedelta(minutes=self.project_config.slot_duration_minutes)
+                    current_time += timedelta(minutes=30)
                 
                 first_row_of_day = False
     
@@ -265,7 +265,7 @@ class GoogleSheetsService:
                 Booking.status == "active"
             )
         ).all()
-        logger.debug(f"Found {len(bookings)} active bookings for date {target_date}")
+        logger.info(f"Found {len(bookings)} active bookings for date {target_date}")
         
         # Debug: Log all bookings found (using INFO level to ensure visibility)
         logger.info(f"BOOKING DEBUG: Found {len(bookings)} active bookings for project '{self.project_config.project_id}' on {target_date}")
@@ -294,17 +294,10 @@ class GoogleSheetsService:
         logger.info(f"PROJECT CONFIG DEBUG: Project ID: '{self.project_config.project_id}'")
         for specialist in self.project_config.specialists:
             specialist_bookings = bookings_by_specialist.get(specialist, [])
-            logger.debug(f"Specialist {specialist} has {len(specialist_bookings)} bookings for date {target_date}")
+            logger.info(f"Specialist {specialist} has {len(specialist_bookings)} bookings for date {target_date}")
             
             # CRITICAL FIX: Get reserved slots from Google Sheets as the PRIMARY source of truth
             sheets_reserved = self._get_reserved_slots_from_sheets(specialist, target_date, time_fraction)
-            # Проверяем на ошибку листа
-            if sheets_reserved == ["WORKSHEET_ERROR"]:
-                logger.error(f"Worksheet error for {specialist}, marking all slots as unavailable")
-                # Помечаем что произошла ошибка с листом
-                all_slots[f"available_slots_{specialist.lower()}"] = ["ERROR: Лист специалиста не найден"]
-                continue
-
             logger.info(f"SHEETS RESERVED SLOTS: Found {len(sheets_reserved)} reserved slots in Google Sheets for {specialist}: {sheets_reserved}")
             
             # Generate all possible work slots
@@ -327,7 +320,7 @@ class GoogleSheetsService:
         reserved_slots = {}
         for specialist in self.project_config.specialists:
             specialist_bookings = bookings_by_specialist.get(specialist, [])
-            logger.debug(f"Processing reserved slots for specialist '{specialist}': found {len(specialist_bookings)} bookings")
+            logger.info(f"Processing reserved slots for specialist '{specialist}': found {len(specialist_bookings)} bookings")
             
             # CRITICAL FIX: Use Google Sheets as primary source for reserved slots
             sheets_slots = self._get_reserved_slots_from_sheets(specialist, target_date, time_fraction)
@@ -351,7 +344,7 @@ class GoogleSheetsService:
             # Additional debug: Check if specialist name case sensitivity is an issue
             all_booking_specialists = set(booking.specialist_name for booking in bookings)
             if all_booking_specialists:
-                logger.debug(f"All booking specialist names found in DB: {all_booking_specialists}")
+                logger.info(f"All booking specialist names found in DB: {all_booking_specialists}")
                 if specialist not in all_booking_specialists:
                     logger.warning(f"Specialist '{specialist}' from config not found in bookings. Available specialists in bookings: {all_booking_specialists}")
             
@@ -432,7 +425,7 @@ class GoogleSheetsService:
                 
                 # CRITICAL FIX: Get reserved slots from Google Sheets for this date
                 sheets_reserved = self._get_reserved_slots_from_sheets(specialist, check_date, time_fraction)
-                logger.debug(f"Google Sheets reserved slots for {specialist} on {check_date}: {sheets_reserved}")
+                logger.info(f"Google Sheets reserved slots for {specialist} on {check_date}: {sheets_reserved}")
                 
                 slots = self._get_available_slots_for_specialist_in_time_range(
                     specialist_bookings, check_date, start_time, end_time, time_fraction, sheets_reserved
@@ -463,7 +456,7 @@ class GoogleSheetsService:
         """Get all possible work slots for a specialist on a specific date"""
         work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
         work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
-        logger.debug(f"Generating all work slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
+        logger.info(f"Generating all work slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
         
         # Generate all possible slots
         all_slots = []
@@ -472,14 +465,14 @@ class GoogleSheetsService:
         
         # Safety check: if time_fraction is 0 (unknown service), use minimum 1 slot for availability check
         effective_time_fraction = max(1, time_fraction)
-        logger.debug(f"Using effective_time_fraction={effective_time_fraction} (original time_fraction={time_fraction})")
+        logger.info(f"Using effective_time_fraction={effective_time_fraction} (original time_fraction={time_fraction})")
         
-        while current_time + timedelta(minutes=self.project_config.slot_duration_minutes* effective_time_fraction) <= end_time:
+        while current_time + timedelta(minutes=30 * effective_time_fraction) <= end_time:
             slot_time = current_time.time()
             all_slots.append(slot_time.strftime("%H:%M"))
-            current_time += timedelta(minutes=self.project_config.slot_duration_minutes)
+            current_time += timedelta(minutes=30)
         
-        logger.debug(f"Generated {len(all_slots)} total work slots for {target_date}: {all_slots}")
+        logger.info(f"Generated {len(all_slots)} total work slots for {target_date}: {all_slots}")
         return all_slots
 
     def _get_available_slots_for_specialist(
@@ -491,15 +484,15 @@ class GoogleSheetsService:
         """Get available slots for a specific specialist on a specific date"""
         work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
         work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
-        logger.debug(f"Calculating slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
+        logger.info(f"Calculating slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
         
         # Create set of occupied time slots
         occupied_slots = set()
         for booking in bookings:
             booking_time = datetime.combine(target_date, booking.appointment_time)
-            booking_duration_slots = booking.duration_minutes // self.project_config.slot_duration_minutes
+            booking_duration_slots = booking.duration_minutes // 30
             for i in range(booking_duration_slots):
-                slot_time = (booking_time + timedelta(minutes=self.project_config.slot_duration_minutes*i)).time()
+                slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
         
         # Generate available slots
@@ -509,15 +502,15 @@ class GoogleSheetsService:
         
         # Safety check: if time_fraction is 0 (unknown service), use minimum 1 slot for availability check
         effective_time_fraction = max(1, time_fraction)
-        logger.debug(f"Using effective_time_fraction={effective_time_fraction} (original time_fraction={time_fraction})")
+        logger.info(f"Using effective_time_fraction={effective_time_fraction} (original time_fraction={time_fraction})")
         
-        while current_time + timedelta(minutes=self.project_config.slot_duration_minutes* effective_time_fraction) <= end_time:
+        while current_time + timedelta(minutes=30 * effective_time_fraction) <= end_time:
             slot_time = current_time.time()
             
             # Check if this slot and required consecutive slots are free
             is_available = True
             for i in range(effective_time_fraction):
-                check_time = (current_time + timedelta(minutes=self.project_config.slot_duration_minutes*i)).time()
+                check_time = (current_time + timedelta(minutes=30*i)).time()
                 if check_time in occupied_slots:
                     is_available = False
                     break
@@ -525,9 +518,9 @@ class GoogleSheetsService:
             if is_available:
                 available_slots.append(slot_time.strftime("%H:%M"))
             
-            current_time += timedelta(minutes=self.project_config.slot_duration_minutes)
+            current_time += timedelta(minutes=30)
         
-        logger.debug(f"Generated {len(available_slots)} available slots for {target_date}: {available_slots}")
+        logger.info(f"Generated {len(available_slots)} available slots for {target_date}: {available_slots}")
         return available_slots
     
     def _get_reserved_slots_for_specialist(
@@ -539,15 +532,15 @@ class GoogleSheetsService:
         """Get reserved/occupied slots for a specific specialist on a specific date"""
         work_start = datetime.strptime(self.project_config.work_hours["start"], "%H:%M").time()
         work_end = datetime.strptime(self.project_config.work_hours["end"], "%H:%M").time()
-        logger.debug(f"Calculating reserved slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
+        logger.info(f"Calculating reserved slots for {target_date} with work hours {work_start}-{work_end}, time_fraction={time_fraction}")
         
         # Create set of occupied time slots from bookings
         occupied_slots = set()
         for booking in bookings:
             booking_time = datetime.combine(target_date, booking.appointment_time)
-            booking_duration_slots = booking.duration_minutes // self.project_config.slot_duration_minutes
+            booking_duration_slots = booking.duration_minutes // 30
             for i in range(booking_duration_slots):
-                slot_time = (booking_time + timedelta(minutes=self.project_config.slot_duration_minutes*i)).time()
+                slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
         
         logger.info(f"RESERVED SLOTS DEBUG: Found {len(occupied_slots)} occupied slots from {len(bookings)} bookings: {sorted([slot.strftime('%H:%M') for slot in occupied_slots])}")
@@ -561,7 +554,7 @@ class GoogleSheetsService:
         # Safety check: if time_fraction is 0 (unknown service), only include occupied slots
         # Don't try to calculate edge cases since we don't know the service duration
         if time_fraction <= 0:
-            logger.debug(f"time_fraction is {time_fraction}, only including occupied slots in reserved_slots")
+            logger.info(f"time_fraction is {time_fraction}, only including occupied slots in reserved_slots")
         else:
             # Add slots that are too close to end of work day for the required duration
             current_time = datetime.combine(target_date, work_start)
@@ -571,28 +564,28 @@ class GoogleSheetsService:
                 slot_time = current_time.time()
                 
                 # Check if this slot would extend beyond work hours with current time_fraction
-                if current_time + timedelta(minutes=self.project_config.slot_duration_minutes* time_fraction) > end_time:
+                if current_time + timedelta(minutes=30 * time_fraction) > end_time:
                     reserved_slots.add(slot_time)
                 
                 # Check if starting at this slot would conflict with existing bookings
                 for i in range(time_fraction):
-                    check_time = (current_time + timedelta(minutes=self.project_config.slot_duration_minutes*i)).time()
+                    check_time = (current_time + timedelta(minutes=30*i)).time()
                     if check_time in occupied_slots:
                         # This slot would conflict, so all slots that would include this occupied slot are reserved
                         for j in range(time_fraction):
-                            conflict_start = current_time - timedelta(minutes=self.project_config.slot_duration_minutes*j)
-                            if conflict_start.time() >= work_start and conflict_start < current_time + timedelta(minutes=self.project_config.slot_duration_minutes):
+                            conflict_start = current_time - timedelta(minutes=30*j)
+                            if conflict_start.time() >= work_start and conflict_start < current_time + timedelta(minutes=30):
                                 reserved_slots.add(conflict_start.time())
                         break
                 
-                current_time += timedelta(minutes=self.project_config.slot_duration_minutes)
+                current_time += timedelta(minutes=30)
         
         # Convert to sorted list of time strings
         reserved_slots_list = []
         for slot in sorted(reserved_slots):
             reserved_slots_list.append(slot.strftime("%H:%M"))
         
-        logger.debug(f"Generated {len(reserved_slots_list)} reserved slots for {target_date}: {reserved_slots_list}")
+        logger.info(f"Generated {len(reserved_slots_list)} reserved slots for {target_date}: {reserved_slots_list}")
         return reserved_slots_list
     
     def _get_reserved_slots_from_sheets(self, specialist_name: str, target_date: date, time_fraction: int) -> List[str]:
@@ -601,7 +594,7 @@ class GoogleSheetsService:
             logger.warning(f"Cannot check reserved slots from sheets: no spreadsheet connection for {specialist_name}")
             return []
         
-        logger.debug(f"Reading reserved slots from Google Sheets for {specialist_name} on {target_date}")
+        logger.info(f"Reading reserved slots from Google Sheets for {specialist_name} on {target_date}")
         
         try:
             # Get worksheet for specialist
@@ -609,7 +602,7 @@ class GoogleSheetsService:
                 worksheet = self.spreadsheet.worksheet(specialist_name)
             except gspread.WorksheetNotFound:
                 logger.warning(f"Worksheet not found for specialist {specialist_name}")
-                return ["WORKSHEET_ERROR"]  # Специальный маркер ошибки
+                return []
             
             reserved_slots = []
             client_bookings_in_sheets = {}  # Добавить после reserved_slots = []
@@ -619,7 +612,7 @@ class GoogleSheetsService:
             try:
                 # Read all values in one batch call
                 all_values = worksheet.get_all_values()
-                logger.debug(f"Successfully retrieved {len(all_values)} rows from worksheet in batch")
+                logger.info(f"Successfully retrieved {len(all_values)} rows from worksheet in batch")
                 
                 target_date_str = target_date.strftime("%d.%m.%Y")
                 
@@ -649,7 +642,7 @@ class GoogleSheetsService:
                             # Check if any booking column has content
                             if any(self._has_content(cell) for cell in [client_id, client_name, service, phone]):
                                 reserved_slots.append(time_val)
-                                logger.debug(f"Found occupied slot in sheets: {time_val} (client_id: {client_id})")
+                                logger.info(f"Found occupied slot in sheets: {time_val} (client_id: {client_id})")
                 
                 # Синхронизация с БД - добавить ПОСЛЕ цикла
                 from app.database import SessionLocal, Booking
@@ -674,13 +667,8 @@ class GoogleSheetsService:
                                 for b in sheets_bookings
                             )
                             if not found_in_sheets:
-                                # Не отменяем записи младше 60 секунд - дать время на синхронизацию с Sheets
-                                from datetime import datetime, timedelta
-                                if db_booking.created_at < datetime.utcnow() - timedelta(seconds=60):
-                                    logger.info(f"Deactivating booking not found in sheets: {client_id} - {booking_time}")
-                                    db_booking.status = "cancelled"
-                                else:
-                                    logger.info(f"Skipping deactivation for fresh booking: {client_id} - {booking_time}")
+                                logger.info(f"Deactivating booking not found in sheets: {client_id} - {booking_time}")
+                                db_booking.status = "cancelled"
                                 db.commit()
                 finally:
                     db.close()
@@ -742,7 +730,7 @@ class GoogleSheetsService:
         try:
             slot_datetime = datetime.strptime(slot_time, "%H:%M")
             for i in range(time_fraction):
-                check_time = (slot_datetime + timedelta(minutes=self.project_config.slot_duration_minutes* i)).strftime("%H:%M")
+                check_time = (slot_datetime + timedelta(minutes=30 * i)).strftime("%H:%M")
                 if check_time in reserved_slots:
                     return False
             return True
@@ -773,9 +761,9 @@ class GoogleSheetsService:
         occupied_slots = set()
         for booking in bookings:
             booking_time = datetime.combine(target_date, booking.appointment_time)
-            booking_duration_slots = booking.duration_minutes // self.project_config.slot_duration_minutes
+            booking_duration_slots = booking.duration_minutes // 30
             for i in range(booking_duration_slots):
-                slot_time = (booking_time + timedelta(minutes=self.project_config.slot_duration_minutes*i)).time()
+                slot_time = (booking_time + timedelta(minutes=30*i)).time()
                 occupied_slots.add(slot_time)
         
         # CRITICAL FIX: Add Google Sheets reserved slots
@@ -795,14 +783,14 @@ class GoogleSheetsService:
         # Safety check: if time_fraction is 0 (unknown service), use minimum 1 slot for availability check
         effective_time_fraction = max(1, time_fraction)
         
-        while current_time + timedelta(minutes=self.project_config.slot_duration_minutes* effective_time_fraction) <= end_datetime:
+        while current_time + timedelta(minutes=30 * effective_time_fraction) <= end_datetime:
             slot_time = current_time.time()
             
             # CRITICAL FIX: Use the time fraction checking method for consistency
             if self._is_slot_available_with_time_fraction(slot_time.strftime("%H:%M"), [t.strftime("%H:%M") for t in occupied_slots], effective_time_fraction):
                 available_slots.append(slot_time.strftime("%H:%M"))
             
-            current_time += timedelta(minutes=self.project_config.slot_duration_minutes)
+            current_time += timedelta(minutes=30)
         
         return available_slots
     
@@ -862,7 +850,7 @@ class GoogleSheetsService:
                 worksheet.update(range_update, [booking_data])
                 
                 # If this is a multi-slot booking, fill additional rows with dashes
-                duration_slots = booking.duration_minutes // self.project_config.slot_duration_minutes
+                duration_slots = booking.duration_minutes // 30
                 if duration_slots > 1:
                     logger.info(f"Booking requires {duration_slots} slots, filling additional {duration_slots - 1} rows with dashes")
                     for i in range(1, duration_slots):
@@ -870,7 +858,7 @@ class GoogleSheetsService:
                         dash_data = ["-", "-", "-", "-"]  # D, E, F, G columns
                         dash_range = f'D{additional_row}:G{additional_row}'
                         worksheet.update(dash_range, [dash_data])
-                        logger.debug(f"  Filled row {additional_row} with dashes for multi-slot booking")
+                        logger.info(f"  Filled row {additional_row} with dashes for multi-slot booking")
                 
                 logger.info(f"Successfully updated booking slot(s) starting at row {target_row} for {specialist_name} ({duration_slots} slots total)")
                 return True
@@ -922,7 +910,7 @@ class GoogleSheetsService:
                 # Clear the main slot
                 range_update = f'D{target_row}:G{target_row}'
                 worksheet.update(range_update, [empty_data])
-                logger.debug(f"Cleared main booking slot at row {target_row}")
+                logger.info(f"Cleared main booking slot at row {target_row}")
                 
                 # If this is a multi-slot booking, clear additional slots
                 if duration_slots > 1:
@@ -931,7 +919,7 @@ class GoogleSheetsService:
                         additional_row = target_row + i
                         additional_range = f'D{additional_row}:G{additional_row}'
                         worksheet.update(additional_range, [empty_data])
-                        logger.debug(f"  Cleared additional slot at row {additional_row}")
+                        logger.info(f"  Cleared additional slot at row {additional_row}")
                 
                 logger.info(f"Successfully cleared booking slot(s) starting at row {target_row} for {specialist_name} ({duration_slots} slots total)")
                 return True
@@ -960,50 +948,72 @@ class GoogleSheetsService:
             return False
 
     def is_slot_available_in_sheets(self, specialist_name: str, booking_date: date, booking_time: time) -> bool:
-        """Check if slot is available using cached DB data instead of direct Sheets API"""
-        from app.database import SessionLocal
-        from sqlalchemy import text
+        """Check if a time slot is available by reading directly from Google Sheets"""
+        if not self.spreadsheet:
+            logger.warning("Cannot check slot availability: no spreadsheet connection")
+            return False
         
-        logger.debug(f"Checking slot availability in DB cache for {specialist_name}: {booking_date} {booking_time}")
+        logger.info(f"Checking slot availability in sheets for {specialist_name}: {booking_date} {booking_time}")
         
-        db = SessionLocal()
         try:
-            # Проверяем в БД кэше
-            query = text("""
-                SELECT client_id, client_name, service 
-                FROM sheets_slots 
-                WHERE specialist = :specialist
-                AND date = :date  
-                AND time = :time
-            """)
+            # Get worksheet for specialist
+            try:
+                worksheet = self.spreadsheet.worksheet(specialist_name)
+                logger.info(f"Successfully found worksheet for specialist: {specialist_name}")
+            except gspread.WorksheetNotFound:
+                logger.warning(f"Worksheet not found for specialist {specialist_name}, returning unavailable")
+                return False  # CHANGED: If no worksheet exists, slot should be unavailable, not available
             
-            result = db.execute(query, {
-                'specialist': specialist_name,
-                'date': booking_date,
-                'time': booking_time
-            }).fetchone()
+            # Find the correct row for this time slot
+            target_row = self._find_row_for_time_slot(worksheet, booking_date, booking_time)
             
-            if result:
-                # Слот занят если client_id не пустой (включая прочерки)
-                is_occupied = (
-                    result.client_id is not None and 
-                    result.client_id != '' and 
-                    result.client_id.strip() != ''
-                )
+            if target_row:
+                # Check if ALL booking columns (D, E, F, G) are empty
+                # Any text in any of these columns means the slot is unavailable
+                logger.info(f"Checking row {target_row} for booking data...")
+                client_id_cell = worksheet.cell(target_row, 4).value  # Column D
+                client_name_cell = worksheet.cell(target_row, 5).value  # Column E
+                service_cell = worksheet.cell(target_row, 6).value  # Column F
+                phone_cell = worksheet.cell(target_row, 7).value  # Column G
                 
-                is_available = not is_occupied
+                logger.info(f"Cell values: D='{client_id_cell}', E='{client_name_cell}', F='{service_cell}', G='{phone_cell}'")
                 
-                logger.debug(f"Slot {booking_time} on {booking_date}: client_id='{result.client_id}', available={is_available}")
+                # Check if any cell has content (any non-empty text or numbers)
+                cells_with_content = []
+                
+                def has_content(cell_value):
+                    """Check if cell has any meaningful content"""
+                    if cell_value is None:
+                        return False
+                    # Convert to string and strip whitespace
+                    str_value = str(cell_value).strip()
+                    # Check if not empty and not just whitespace
+                    return len(str_value) > 0
+                
+                if has_content(client_id_cell):
+                    cells_with_content.append(f"D:'{client_id_cell}'")
+                if has_content(client_name_cell):
+                    cells_with_content.append(f"E:'{client_name_cell}'")
+                if has_content(service_cell):
+                    cells_with_content.append(f"F:'{service_cell}'")
+                if has_content(phone_cell):
+                    cells_with_content.append(f"G:'{phone_cell}'")
+                
+                is_available = len(cells_with_content) == 0
+                
+                if cells_with_content:
+                    logger.info(f"Slot NOT available - found content in: {', '.join(cells_with_content)}")
+                else:
+                    logger.info("Slot is available - all booking columns are empty")
+                
                 return is_available
             else:
-                logger.warning(f"No slot found in DB for {specialist_name} {booking_date} {booking_time}")
+                logger.warning(f"Time slot not found in sheets structure: {booking_date} {booking_time}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error checking slot availability in DB: {e}", exc_info=True)
-            return False
-        finally:
-            db.close()
+            logger.error(f"Error checking slot availability in sheets: {e}", exc_info=True)
+            return False  # Assume not available on error to be safe
 
     async def save_feedback_to_sheets_async(
         self, 
@@ -1040,7 +1050,7 @@ class GoogleSheetsService:
             # Get or create the feedback sheet
             try:
                 feedback_sheet = self.spreadsheet.worksheet("Хран")
-                logger.debug("Found existing 'Хран' worksheet")
+                logger.info("Found existing 'Хран' worksheet")
             except gspread.WorksheetNotFound:
                 logger.info("'Хран' worksheet not found, creating new one")
                 feedback_sheet = self.spreadsheet.add_worksheet(title="Хран", rows=1000, cols=5)
@@ -1068,7 +1078,7 @@ class GoogleSheetsService:
             feedback_sheet.update(range_to_update, [feedback_row])
             
             logger.info(f"Successfully saved feedback to 'Хран' sheet at row {next_row}")
-            logger.debug(f"Feedback data: {feedback_row}")
+            logger.info(f"Feedback data: {feedback_row}")
             return True
             
         except Exception as e:
@@ -1091,7 +1101,7 @@ class GoogleSheetsService:
                     time_val = row[2] if len(row) > 2 else ""  # Column C: HH:MM
                     
                     if date_val == target_date_str and time_val == target_time_str:
-                        logger.debug(f"Found matching slot at row {i}: {date_val} {time_val}")
+                        logger.info(f"Found matching slot at row {i}: {date_val} {time_val}")
                         return i
             
             logger.warning(f"No matching row found for {target_date_str} {target_time_str}")
@@ -1231,7 +1241,7 @@ class GoogleSheetsService:
                 
                 rows_data.append(row_data)
                 first_row_of_day = False
-                current_time += timedelta(minutes=self.project_config.slot_duration_minutes)
+                current_time += timedelta(minutes=30)
             
             current_date += timedelta(days=1)
         
@@ -1589,15 +1599,22 @@ class GoogleSheetsService:
 
 
     async def log_error_to_sheets_async(self, error_data: dict) -> bool:
-        """Логирует ошибку в отдельный лист 'Ошибки' в таблице Make.com"""
+        """
+        Записывает ошибку в лист 'Ошибки' таблицы Make.com
+        
+        Args:
+            error_data: {
+                'client_id': str,
+                'client_name': str, 
+                'error_message': str,
+                'error_type': str,
+                'message_id': str,
+                'timestamp': datetime
+            }
+        """
         try:
-            # Используем project_config как в других методах
+            # Get Make.com sheet ID from config
             make_sheet_id = getattr(self.project_config, 'google_sheet_make_id', None)
-            if not make_sheet_id:
-                # Пробуем из переменных окружения как запасной вариант
-                import os
-                make_sheet_id = os.getenv('GOOGLE_SHEET_MAKE_ID')
-                
             if not make_sheet_id:
                 logger.warning("Make.com sheet ID not configured for error logging")
                 return False
@@ -1605,36 +1622,42 @@ class GoogleSheetsService:
             gc = self._get_sheets_client()
             spreadsheet = gc.open_by_key(make_sheet_id)
             
-            # Создаем или получаем лист "Ошибки"
+            # Проверяем существует ли лист "Ошибки", если нет - создаем
             try:
-                worksheet = spreadsheet.worksheet("Ошибки")
-                logger.info("Found existing 'Ошибки' worksheet")
-            except Exception as worksheet_error:
-                logger.info(f"Creating new 'Ошибки' worksheet: {worksheet_error}")
-                try:
-                    worksheet = spreadsheet.add_worksheet(title="Ошибки", rows=1000, cols=10)
-                    logger.info("Successfully created 'Ошибки' worksheet")
-                except Exception as create_error:
-                    logger.error(f"Failed to create 'Ошибки' worksheet: {create_error}")
-                    raise
+                error_worksheet = spreadsheet.worksheet("Ошибки")
+            except:
+                # Создаем новый лист
+                error_worksheet = spreadsheet.add_worksheet(title="Ошибки", rows=1000, cols=10)
                 # Добавляем заголовки
-                headers = ["Дата/Время", "ID клиента", "Имя клиента", "Тип ошибки", "Сообщение об ошибке", "Message ID", "Статус"]
-                worksheet.append_row(headers)
+                headers = [
+                    "Дата/Время",
+                    "ID клиента", 
+                    "Имя клиента",
+                    "Тип ошибки",
+                    "Сообщение ошибки",
+                    "Message ID",
+                    "Статус"
+                ]
+                error_worksheet.append_row(headers)
+                logger.info("Created new 'Ошибки' worksheet in Make.com table")
             
-            # Добавляем строку с ошибкой
-            from datetime import datetime
+            # Форматируем данные для записи
+            timestamp = error_data.get('timestamp', datetime.now())
+            timestamp_str = timestamp.strftime("%d.%m.%Y %H:%M:%S")
+            
             row_data = [
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                str(error_data.get('client_id', '')),
-                error_data.get('client_name', 'Unknown'),
+                timestamp_str,
+                error_data.get('client_id', ''),
+                error_data.get('client_name', 'Неизвестный'),
                 error_data.get('error_type', 'booking_error'),
                 error_data.get('error_message', ''),
                 error_data.get('message_id', ''),
-                'Logged'
+                'Новая'  # Статус
             ]
             
-            worksheet.append_row(row_data)
-            logger.info(f"Error logged to sheets: {error_data.get('error_message', '')[:50]}")
+            # Добавляем строку в таблицу
+            error_worksheet.append_row(row_data)
+            logger.info(f"Error logged to sheets: {error_data.get('error_message', '')[:50]}...")
             return True
             
         except Exception as e:

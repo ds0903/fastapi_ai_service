@@ -169,22 +169,52 @@ class DialogueArchivingService:
     
     def _build_dialogue_history(self, dialogues: List[Dialogue]) -> str:
         """Build dialogue history string from dialogue entries"""
+        if not dialogues:
+            logger.debug("Building dialogue history from 0 entries")
+            return ""
+        
         logger.debug(f"Building dialogue history from {len(dialogues)} entries")
         
         history_lines = []
+        prev_timestamp = None
         
-        for dialogue in dialogues:  # Reverse to chronological order
+        for dialogue in reversed(dialogues):  # Reverse to chronological order
             role = "Клиент" if dialogue.role == "client" else "Бот"
             timestamp = dialogue.timestamp.strftime("%d.%m %H:%M")
-            history_lines.append(f"[{timestamp}] {role}: {dialogue.message}")
+            
+            # Calculate time difference if not first message
+            time_diff = ""
+            if prev_timestamp:
+                diff = dialogue.timestamp - prev_timestamp
+                total_seconds = int(diff.total_seconds())
+                
+                if total_seconds < 60:
+                    time_diff = f" (через {total_seconds} сек)"
+                elif total_seconds < 3600:
+                    minutes = total_seconds // 60
+                    time_diff = f" (через {minutes} мин)"
+                elif total_seconds < 86400:
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    if minutes > 0:
+                        time_diff = f" (через {hours} ч {minutes} мин)"
+                    else:
+                        time_diff = f" (через {hours} ч)"
+                else:
+                    days = total_seconds // 86400
+                    hours = (total_seconds % 86400) // 3600
+                    if hours > 0:
+                        time_diff = f" (через {days} дн {hours} ч)"
+                    else:
+                        time_diff = f" (через {days} дн)"
+            
+            history_lines.append(f"[{timestamp}{time_diff}] {role}: {dialogue.message}")
+            prev_timestamp = dialogue.timestamp
         
         history_text = "\n".join(history_lines)
         logger.debug(f"Built dialogue history: {len(history_text)} characters, {len(history_lines)} lines")
         
         return history_text
-    
-    def get_recent_dialogue_history(self, db: Session, project_id: str, client_id: str) -> str:
-        """Get dialogue history from last 24 hours for active conversation"""
         cutoff_time = datetime.utcnow() - timedelta(hours=self.compression_hours)
         
         recent_dialogues = db.query(Dialogue).filter(

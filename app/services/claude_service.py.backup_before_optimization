@@ -1,14 +1,12 @@
 import json
-import re
 import asyncio
 import random
 from typing import Dict, Any, Optional
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from anthropic import AsyncAnthropic
 from anthropic import InternalServerError, RateLimitError, APIConnectionError
 from sqlalchemy.orm import Session
 import logging
-from pytz import timezone
 
 from ..config import settings, ProjectConfig
 from ..utils.prompt_loader import get_prompt
@@ -25,9 +23,8 @@ logger = logging.getLogger(__name__)
 class ClaudeService:
     """Service for handling Claude AI interactions with improved error handling and retry logic"""
     
-    def __init__(self, db: Session, slot_duration_minutes: int = 30):
+    def __init__(self, db: Session):
         self.db = db
-        self.slot_duration_minutes = slot_duration_minutes
         try:
             self.client1 = AsyncAnthropic(api_key=settings.claude_api_key_1)
             self.client2 = AsyncAnthropic(api_key=settings.claude_api_key_2)
@@ -107,77 +104,6 @@ class ClaudeService:
                 self.client2_failures = 0
                 self.client2_last_failure = None
     
-    async def _cached_claude_request(
-        self,
-        client: AsyncAnthropic,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int = 2000,
-        use_hour_cache: bool = True,
-        message_id: str = None
-    ):
-        """
-        Make a Claude API request with 1-hour prompt caching support.
-        """
-        try:
-            logger.debug(f"System prompt length: {len(system_prompt)}, first 500 chars: {system_prompt[:500]}")
-            # Добавим хэш системного промпта для отладки кэширования
-            import hashlib
-            system_hash = hashlib.md5(system_prompt.encode()).hexdigest()[:8]
-            logger.debug(f"Message ID: {message_id} - System prompt hash: {system_hash}, length: {len(system_prompt)}")
-            
-            # Build messages
-            messages = [{"role": "user", "content": user_prompt}]
-            
-            # Build messages
-            messages = [{"role": "user", "content": user_prompt}]
-            
-            # Build kwargs
-            kwargs = {
-                "model": settings.claude_model,
-                "max_tokens": max_tokens,
-                "messages": messages
-            }
-            
-            # Add system prompt with caching
-            if system_prompt and use_hour_cache:
-                kwargs["system"] = [
-                    {
-                        "type": "text",
-                        "text": system_prompt,
-                        "cache_control": {"type": "ephemeral", "ttl": "1h"}
-                    }
-                ]
-                kwargs["extra_headers"] = {"anthropic-beta": "extended-cache-ttl-2025-04-11"}
-                logger.info(f"Message ID: {message_id} - Using 1-hour cached system prompt ({len(system_prompt)} chars)")
-            
-            # Make the request
-            response = await client.messages.create(**kwargs)
-            # Логируем точные данные от API
-            if hasattr(response, 'usage'):
-                usage = response.usage
-                logger.info(f"Message ID: {message_id} - EXACT API tokens: cache_read={getattr(usage, 'cache_read_input_tokens', 0)}, regular_input={getattr(usage, 'input_tokens', 0)}, output={getattr(usage, 'output_tokens', 0)}")
-            
-            # Детальное логирование cache usage
-            if hasattr(response, 'usage'):
-                usage = response.usage
-                cache_creation = getattr(usage, 'cache_creation_input_tokens', 0)
-                cache_read = getattr(usage, 'cache_read_input_tokens', 0)
-                regular_input = getattr(usage, 'input_tokens', 0)
-                
-                if cache_creation > 0:
-                    logger.info(f"Message ID: {message_id} - Cache CREATED: {cache_creation} tokens (cost: ~${cache_creation * 0.000006:.4f})")
-                if cache_read > 0:
-                    logger.info(f"Message ID: {message_id} - Cache HIT: {cache_read} tokens (saved: ~${(cache_read * 0.000003 - cache_read * 0.0000003):.4f})")
-                
-                logger.debug(f"Message ID: {message_id} - Token usage: cache_create={cache_creation}, cache_read={cache_read}, regular={regular_input}")
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Message ID: {message_id} - Cached request failed: {e}")
-            raise
-
     def _get_available_claude_client(self, counter: int, message_id: str = None) -> tuple[AsyncAnthropic, int]:
         """Get available Claude client with circuit breaker logic"""
         # Try preferred client first
@@ -276,188 +202,102 @@ class ClaudeService:
                 raise
     
     async def detect_intent(
-        self,
+        self, 
         project_config: ProjectConfig,
         dialogue_history: str,
         current_message: str,
-        current_date: str,  # Добавлено
-   	day_of_week: str,   # Добавлено
-        date_calendar: str,  # Добавлено
         message_id: str,
         zip_history: Optional[str] = None
     ) -> IntentDetectionResult:
         """
-        Module 1: Intent detection with proper caching separation
+        Module 1: Intent detection
+        Determines if client wants to book, specified date, or time preferences
         """
         logger.info(f"Message ID: {message_id} - Starting intent detection for project {project_config.project_id}")
+        logger.debug(f"Message ID: {message_id} - Message for intent detection: '{current_message[:100]}...'")
         
-        # STATIC system prompt (кэшируется на час)
-        system_prompt = get_prompt("intent_detection")
+        prompt = self._build_intent_detection_prompt(
+            project_config,
+            dialogue_history,
+            current_message,
+            zip_history
+        )
         
-        # DYNAMIC user prompt (все переменные данные)
-        berlin_tz = timezone('Europe/Berlin')
-        current_date = datetime.now(berlin_tz).strftime("%d.%m.%Y %H:%M")
+        logger.info(f"Message ID: {message_id} - Built intent detection prompt, length: {len(prompt)} characters")
         
-        user_prompt_parts = [
-            f"current_date: {current_date}",
-            f"day_of_week: {day_of_week}",  # Добавляем эту строку
-            f"date_calendar:\n{date_calendar}",  # Календарь на месяц
-            f"dialogue_history: {dialogue_history}"
-        ]
-        
-        if zip_history:
-            user_prompt_parts.append(f"zip_history: {zip_history}")
-            
-        user_prompt_parts.append(f"current_message: {current_message}")
-        user_prompt = "\n".join(user_prompt_parts)
-        
-        logger.info(f"Message ID: {message_id} - Prompts: system={len(system_prompt)} chars (static), user={len(user_prompt)} chars (dynamic)")
-
-        # Use retry mechanism with caching
         try:
-            response = await self._retry_claude_request(
-                lambda client: self._cached_claude_request(
-                    client=client,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
+            truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for intent detection. Dialogue history: {truncated_history}, current message: {current_message}")
+            
+            # Define the request function for retry mechanism
+            async def make_request(client):
+                return await client.messages.create(
+                    model=settings.claude_model,
                     max_tokens=1000,
-                    use_hour_cache=True,
-                    message_id=message_id
-                ),
-                max_retries=3,
-                message_id=message_id
-            )
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            
+            # Use retry mechanism
+            response = await self._retry_claude_request(make_request, max_retries=3, message_id=message_id)
             
             raw_response = response.content[0].text
-            logger.info(f"Message ID: {message_id} - Claude raw response for intent detection: {raw_response[:500]}")
+            logger.info(f"Message ID: {message_id} - Claude raw response for intent detection: {raw_response}")
             logger.info(f"Message ID: {message_id} - Intent detection response length: {len(raw_response)} chars")
             
-            # Parse and validate response
-            result = self._parse_and_validate_intent_response(raw_response, message_id, 1, 1)
-            
-            if result:
-                intent_result = IntentDetectionResult(**result)
-                logger.info(f"Message ID: {message_id} - Claude thinking: {result.get('thinking', 'not provided')}")
-                logger.info(f"Message ID: {message_id} - Intent detection completed: waiting={intent_result.waiting}, "
-                          f"date_order={intent_result.date_order}, time_range={intent_result.desire_time0}-{intent_result.desire_time1}")
-                return intent_result
-            else:
-                logger.warning(f"Message ID: {message_id} - Intent detection failed after attempts, returning default (waiting=1)")
+            if not raw_response.strip():
+                logger.warning(f"Message ID: {message_id} - Intent detection received empty response from Claude")
                 return IntentDetectionResult(waiting=1)
-                
+            
+            result = self._parse_intent_response(raw_response, message_id)
+            intent_result = IntentDetectionResult(**result)
+            
+            logger.info(f"Message ID: {message_id} - Claude thinking parsed result: {result}")
+            logger.info(f"Message ID: {message_id} - Intent detection completed: waiting={intent_result.waiting}, date_order={intent_result.date_order}, time_range={intent_result.desire_time0}-{intent_result.desire_time1}")
+            return intent_result
+            
         except Exception as e:
             logger.error(f"Message ID: {message_id} - Error in intent detection: {e}", exc_info=True)
             logger.warning(f"Message ID: {message_id} - Falling back to default intent result (waiting=1)")
             return IntentDetectionResult(waiting=1)
-
-    def _parse_and_validate_intent_response(self, raw_response: str, message_id: str, attempt: int, max_attempts: int) -> Optional[dict]:
-        """
-        Парсит и валидирует ответ от Claude в JSON формат
-        Проверяет наличие критических полей согласно промпту
-        """
-        try:
-            # Очищаем ответ от лишних символов
-            content = raw_response.strip()
-        
-            # Удаляем markdown блоки кода если есть
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-        
-            # Пытаемся найти JSON в тексте (на случай если есть текст до или после JSON)
-            import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                content = json_match.group(0)
-        
-            # Парсим JSON
-            result = json.loads(content)
-        
-            # Проверяем что это словарь
-            if not isinstance(result, dict):
-                raise ValueError(f"Response is not a dictionary: {type(result)}")
-        
-            # Логируем thinking если есть
-            if 'thinking' in result:
-                logger.debug(f"Message ID: {message_id} - Claude thinking: {result['thinking'][:200]}")
-        
-            # Проверяем критические поля согласно промпту
-            # Должен быть либо waiting, либо date_order, либо пара desire_time_0/desire_time_1
-            has_waiting = 'waiting' in result
-            has_date_order = 'date_order' in result
-            has_time_pair = 'desire_time_0' in result and 'desire_time_1' in result
-        
-            if not (has_waiting or has_date_order or has_time_pair):
-                logger.warning(f"Message ID: {message_id} - JSON missing critical fields. Has: {list(result.keys())}")
-                if attempt < max_attempts:
-                    return None  # Триггерим retry
-        
-            # Преобразуем формат для совместимости с IntentDetectionResult
-            # desire_time_0 и desire_time_1 -> desire_time (берем начало интервала)
-            if has_time_pair:
-                result['desire_time'] = result.get('desire_time_0')
-                # Сохраняем оба значения для логирования
-                logger.info(f"Message ID: {message_id} - Time interval detected: {result['desire_time_0']} - {result['desire_time_1']}")
-        
-            # Убеждаемся что waiting - это число
-            if has_waiting:
-                result['waiting'] = int(result.get('waiting', 0))
-            else:
-                result['waiting'] = 0
-        
-            # Добавляем недостающие поля со значениями None для IntentDetectionResult
-            for field in ['name', 'procedure', 'cosmetolog', 'desire_date']:
-                if field not in result:
-                    result[field] = None
-        
-            return result
-        
-        except json.JSONDecodeError as e:
-            logger.error(f"Message ID: {message_id} - Failed to parse JSON (attempt {attempt}): {e}")
-            logger.error(f"Message ID: {message_id} - Raw content that failed: {raw_response[:500]}")
-            return None
-        except Exception as e:
-            logger.error(f"Message ID: {message_id} - Validation error (attempt {attempt}): {e}")
-            return None
     
     async def identify_service(
         self,
         project_config: ProjectConfig,
         dialogue_history: str,
         current_message: str,
-        message_id: str
+        message_id: str,
+        zip_history: Optional[str] = None
     ) -> ServiceIdentificationResult:
         """
-        Module 2: Service identification with proper caching
+        Module 2: Service identification
+        Determines which service client wants and its duration
         """
-        logger.info(f"Message ID: {message_id} - Starting service identification")
+        logger.info(f"Message ID: {message_id} - Starting service identification for project {project_config.project_id}")
+        logger.debug(f"Message ID: {message_id} - Available services: {list(project_config.services.keys())}")
         
-        # STATIC system prompt (включает список услуг - редко меняется)
-        base_prompt = get_prompt("service_identification")
-        services_json = json.dumps(project_config.services, ensure_ascii=False, indent=2)
-        system_prompt = f"{base_prompt}\n\nДоступные услуги:\n{services_json}"
+        prompt = self._build_service_identification_prompt(
+            project_config,
+            dialogue_history,
+            current_message,
+            zip_history
+        )
         
-        # DYNAMIC user prompt
-        user_prompt = f"""dialogue_history: {dialogue_history}
-current_message: {current_message}"""
-        
-        logger.info(f"Message ID: {message_id} - Prompts: system={len(system_prompt)} chars (static), user={len(user_prompt)} chars (dynamic)")
+        logger.debug(f"Message ID: {message_id} - Built service identification prompt, length: {len(prompt)} characters")
         
         try:
-            response = await self._cached_claude_request(
-                    client=self.client1,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
+            truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for service identification. Dialogue history: {truncated_history}, current message: {current_message}")
+            
+            # Define the request function for retry mechanism
+            async def make_request(client):
+                return await client.messages.create(
+                    model=settings.claude_model,
                     max_tokens=500,
-                    use_hour_cache=True,
-                    message_id=message_id
+                    messages=[{"role": "user", "content": prompt}]
                 )
             
             # Use retry mechanism
+            response = await self._retry_claude_request(make_request, max_retries=3, message_id=message_id)
             
             raw_response = response.content[0].text
             logger.info(f"Message ID: {message_id} - Claude raw response for service identification: {raw_response}")
@@ -471,7 +311,7 @@ current_message: {current_message}"""
             service_result = ServiceIdentificationResult(**result)
             
             logger.info(f"Message ID: {message_id} - Claude thinking parsed result: {result}")
-            duration_minutes = service_result.time_fraction * self.slot_duration_minutes
+            duration_minutes = service_result.time_fraction * 30
             logger.info(f"Message ID: {message_id} - Service identification completed: service='{service_result.service_name}', duration={service_result.time_fraction} slots ({duration_minutes} minutes)")
             return service_result
             
@@ -486,66 +326,49 @@ current_message: {current_message}"""
         dialogue_history: str,
         current_message: str,
         current_date: str,
-        day_of_week: str,
-        date_calendar: str,
         available_slots: Dict[str, Any],
         reserved_slots: Dict[str, Any],
         rows_of_owner: str,
         message_id: str,
         slots_target_date: Optional[str] = None,
         zip_history: Optional[str] = None,
-        record_error: Optional[str] = None,
-        newbie_status: int = 1  # ДОБАВЛЯЕМ ПАРАМЕТР
+        record_error: Optional[str] = None
     ) -> ClaudeMainResponse:
         """
-        Module 3: Main response with proper caching separation
+        Module 3: Main response generation
+        Core module that generates client response and booking commands
         """
-        logger.info(f"Message ID: {message_id} - Starting main response generation")
+        logger.info(f"Message ID: {message_id} - Starting main response generation for project {project_config.project_id}")
+        logger.debug(f"Message ID: {message_id} - Available slots count: {len(available_slots)}, reserved slots count: {len(reserved_slots)}")
+        logger.debug(f"Message ID: {message_id} - Current message: '{current_message[:100]}...'")
         
-        # STATIC system prompt (только базовый промпт и статические данные)
-        base_prompt = get_prompt("main_response")
-        specialists = ', '.join(project_config.specialists)
-        system_prompt = f"{base_prompt}\n\nСпециалисты: {specialists}"
+        prompt = self._build_main_response_prompt(
+            project_config,
+            dialogue_history,
+            current_message,
+            current_date,
+            available_slots,
+            reserved_slots,
+            rows_of_owner,
+            zip_history,
+            record_error,
+            slots_target_date
+        )
         
-        # DYNAMIC user prompt (все переменные данные)
-        user_prompt_parts = [
-            f"current_date: {current_date}",
-            f"newbie_massage: {newbie_status} (1=новичок в массаже, 0=уже был на массаже)"
-            f"dialogue_history: {dialogue_history}",
-            f"current_message: {current_message}",
-            f"day_of_week: {day_of_week}",  # Добавляем эту строку
-            f"date_calendar:\n{date_calendar}",  # Календарь на месяц
-            f"available_slots: {json.dumps(available_slots, ensure_ascii=False)}",
-            f"reserved_slots: {json.dumps(reserved_slots, ensure_ascii=False)}",
-            f"rows_of_owner: {rows_of_owner}"
-        ]
-        
-        if zip_history:
-            user_prompt_parts.append(f"zip_history: {zip_history}")
-        if record_error:
-            user_prompt_parts.append(f"record_error: {record_error}")
-        if slots_target_date:
-            user_prompt_parts.append(f"slots_target_date: {slots_target_date}")
-            
-        user_prompt = "\n".join(user_prompt_parts)
-        
-        logger.info(f"Message ID: {message_id} - Prompts: system={len(system_prompt)} chars (static), user={len(user_prompt)} chars (dynamic)")
-        
+        logger.debug(f"Message ID: {message_id} - Built main response prompt, length: {len(prompt)} characters")
         
         try:
             truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
-            logger.info(f"Message ID: {message_id} - Sending async request to Claude for main response generation. Dialogue history: {truncated_history}, current_message: '{current_message[:100]}...'")
+            logger.info(f"Message ID: {message_id} - Sending async request to Claude for main response generation. Dialogue history: {truncated_history}, current message: {current_message}, current date: {current_date}, available slots: {available_slots}, reserved slots: {reserved_slots}, rows of owner: {rows_of_owner}, zip history: {zip_history}, record error: {record_error}")
             
             # Define the request function for retry mechanism
             async def make_request(client):
-                return await self._cached_claude_request(
-                    client=client,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
+                return await client.messages.create(
+                    model=settings.claude_model,
                     max_tokens=2000,
-                    use_hour_cache=True,
-                    message_id=message_id
+                    messages=[{"role": "user", "content": prompt}]
                 )
+            
             # Use retry mechanism
             response = await self._retry_claude_request(make_request, max_retries=3, message_id=message_id)
             
@@ -616,8 +439,7 @@ current_message: {current_message}"""
     ) -> str:
         """Build prompt for intent detection"""
         base_prompt = get_prompt("intent_detection")
-        berlin_tz = timezone('Europe/Berlin')
-        current_date = datetime.now(berlin_tz).strftime("%d.%m.%Y %H:%M")
+        current_date = datetime.now().strftime("%d.%m.%Y")
         
         zip_history_section = f"\nzip_history: {zip_history}" if zip_history else ""
         
@@ -854,75 +676,25 @@ current_message: {current_message}"""
         """Parse service identification response"""
         try:
             logger.debug(f"Message ID: {message_id} - Parsing service response: {response[:200]}...")
-            
+            # Handle "json{...}" prefix that Claude sometimes adds
             import re
             clean_response = response.strip()
-            
-            # Handle "json{...}" prefix that Claude sometimes adds
             if clean_response.startswith("json"):
                 clean_response = clean_response[4:].strip()
             
-            # Попытка 1: Извлечь JSON из блока ```json ... ```
-            json_match = re.search(r'```json\s*(.*?)\s*```', clean_response, re.DOTALL)
-            if json_match:
-                clean_response = json_match.group(1).strip()
-            else:
-                # Попытка 2: Найти первый валидный JSON объект в тексте
-                # Ищем начало JSON объекта
-                json_start = clean_response.find('{')
-                if json_start > 0:  # Если есть текст перед JSON
-                    # Пытаемся найти конец JSON, подсчитывая скобки
-                    brace_count = 0
-                    in_string = False
-                    escape_next = False
-                    json_end = json_start
-                    
-                    for i in range(json_start, len(clean_response)):
-                        char = clean_response[i]
-                        
-                        if escape_next:
-                            escape_next = False
-                            continue
-                        
-                        if char == '\\':
-                            escape_next = True
-                            continue
-                        
-                        if char == '"' and not escape_next:
-                            in_string = not in_string
-                        
-                        if not in_string:
-                            if char == '{':
-                                brace_count += 1
-                            elif char == '}':
-                                brace_count -= 1
-                                if brace_count == 0:
-                                    json_end = i + 1
-                                    break
-                    
-                    if json_end > json_start:
-                        clean_response = clean_response[json_start:json_end]
-            
-            # Strip any remaining markdown code blocks
+            # Strip ```json ... ``` wrapper
             if clean_response.startswith("```"):
                 clean_response = re.sub(r"^```[a-zA-Z]*\s*", "", clean_response)
                 clean_response = re.sub(r"\s*```$", "", clean_response)
             
             logger.debug(f"Message ID: {message_id} - Cleaned service response for JSON parsing: {clean_response[:200]}...")
-            
             result = json.loads(clean_response)
             parsed_result = {
                 "time_fraction": result.get("time_fractions", result.get("time_fraction", 1)),
                 "service_name": result.get("service_name", "unknown")
             }
-            
-            # Если time_fractions - пустой словарь, используем дефолт
-            if isinstance(parsed_result["time_fraction"], dict) and not parsed_result["time_fraction"]:
-                parsed_result["time_fraction"] = 1
-                
             logger.debug(f"Message ID: {message_id} - Service response parsed successfully: {parsed_result}")
             return parsed_result
-            
         except Exception as e:
             logger.error(f"Message ID: {message_id} - Failed to parse service response JSON: {e}")
             logger.warning(f"Message ID: {message_id} - Raw response was: '{response[:100]}...'")
@@ -949,13 +721,11 @@ current_message: {current_message}"""
             logger.debug(f"Message ID: {message_id} - Cleaned response for JSON parsing: {clean_response[:200]}...")
             result = json.loads(clean_response)
             parsed_result = {
-                "gpt_response": result.get("client_response") or result.get("response") or result.get("message") or result.get("gpt_response", ""),
+                "gpt_response": result.get("client_response", result.get("gpt_response", "")),
                 "pic": result.get("pic"),
                 "activate_booking": result.get("activate_booking"),
                 "reject_order": result.get("reject_order"),
                 "change_order": result.get("change_order"),
-                "booking_confirmed": result.get("booking_confirmed"),
-                "booking_declined": result.get("booking_declined"),
                 "cosmetolog": result.get("cosmetolog"),
                 "time_set_up": result.get("time_set_up"),
                 "date_order": result.get("date_order"),

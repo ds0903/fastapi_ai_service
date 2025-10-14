@@ -26,7 +26,6 @@ from app.models import (
     MessageStatus
 )
 from app.services.message_queue import MessageQueueService
-from app.utils.date_calendar import generate_calendar_for_claude
 from app.services.claude_service import ClaudeService
 from app.services.google_sheets import GoogleSheetsService
 from app.services.booking_service import BookingService
@@ -660,10 +659,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             berlin_tz = pytz.timezone('Europe/Berlin')
             berlin_now = datetime.now(berlin_tz)
             current_date = berlin_now.strftime("%d.%m.%Y %H:%M")
-            
-            # Генерируем календарь на месяц вперед для Claude
-            date_calendar = generate_calendar_for_claude(berlin_now, days_ahead=30)
-            logger.debug(f"Message ID: {message_id} - Generated calendar: {len(date_calendar)} characters")
             day_of_week = berlin_now.strftime("%A")  # Monday, Tuesday, etc.
 
             # Step 1: Intent detection (async)
@@ -675,7 +670,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     message_item.aggregated_message,
                     current_date,  # Добавляем
                     day_of_week,   # Добавляем
-                    date_calendar,  # Добавляем календарь
                     message_id, 
                     zip_history
                 )
@@ -926,7 +920,6 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     message_item.aggregated_message,
                     current_date.strftime("%d.%m.%Y %H:%M"),
                     day_of_week, 
-                    date_calendar,  # Добавляем календарь
                     available_slots,
                     reserved_slots,
                     client_bookings,

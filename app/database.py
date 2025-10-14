@@ -134,6 +134,17 @@ class Feedback(Base):
     booking = relationship("Booking")
 
 
+
+class BookingError(Base):
+    """Table for storing booking errors to show them in next message"""
+    __tablename__ = "booking_errors"
+    
+    id = Column(Integer, primary_key=True)
+    client_id = Column(String(255), unique=True, nullable=False)
+    error_message = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 def create_tables():
     """Create all database tables"""
     Base.metadata.create_all(bind=engine)

@@ -1,0 +1,20 @@
+[0;1;32m●[0m anna-paris-bot-8013.service - Anna Paris Bot Backend Port 8013
+     Loaded: loaded (]8;;file://vmi2642372/etc/systemd/system/anna-paris-bot-8013.service/etc/systemd/system/anna-paris-bot-8013.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Fri 2025-10-10 13:12:59 CEST; 2s ago
+   Main PID: 1477204 (uvicorn)
+      Tasks: 3 (limit: 9486)
+     Memory: 79.7M (peak: 94.5M)
+        CPU: 2.625s
+     CGroup: /system.slice/anna-paris-bot-8013.service
+             └─[0;38;5;245m1477204 /root/anna-paris-8013/.venv/bin/python3 /root/anna-paris-8013/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8013[0m
+
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,648 - main - INFO - Started Google Sheets background sync (every 5 min)
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,649 - app.services.dialogue_archiving - INFO - Starting dialogue compression background task
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,649 - app.services.dialogue_archiving - INFO - Starting dialogue compression process for 1 projects
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,649 - app.services.dialogue_archiving - INFO - Compressing dialogues older than 2025-10-09 13:13:01.649919 (cutoff: 24 hours ago)
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,674 - app.services.dialogue_archiving - INFO - Database stats: Total dialogues: 1178, Unarchived: 28, Old dialogues (>24h): 2
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,678 - app.services.dialogue_archiving - INFO - Found 1 clients with dialogues ready for compression
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,690 - app.services.dialogue_archiving - INFO - Compressing 2 old dialogues for client_id=1013293753
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: 2025-10-10 13:13:01,897 - app.services.sheets_sync - INFO - [SYNC] Starting Google Sheets → DB background sync task
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: INFO:     Application startup complete.
+Oct 10 13:13:01 vmi2642372 uvicorn[1477204]: INFO:     Uvicorn running on http://0.0.0.0:8013 (Press CTRL+C to quit)

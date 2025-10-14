@@ -154,4 +154,5 @@ celerybeat.pid
 dmypy.json
 
 # Pyre type checker
-.pyre/ 
+.pyre/ credentials*.json
+local_config.json

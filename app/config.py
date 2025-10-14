@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     google_credentials_file: str = Field(default="credentials.json")
     google_sheets_credentials_file: str = Field(default="credentials.json")
     google_sheet_id: str = Field(default="")
+    google_sheet_make_id: str = Field(default="")
     google_sheets_scopes: List[str] = Field(default=[
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -70,7 +71,8 @@ class ProjectConfig:
         self.project_id = project_id
         self.database_table_name = f"bookings_{project_id}"
         self.google_sheet_id = settings.google_sheet_id
-        self.google_drive_folder_id = ""
+        self.google_sheet_make_id = getattr(settings, "google_sheet_make_id", "")
+        self.slot_duration_minutes = settings.slot_duration_minutes
         self.claude_prompts = get_all_prompts()
         self.services = {}  # service_name -> duration_in_slots
         self.specialists = []

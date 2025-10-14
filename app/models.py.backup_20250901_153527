@@ -72,8 +72,6 @@ class ClaudeMainResponse(BaseModel):
     activate_booking: Optional[bool] = Field(None)
     reject_order: Optional[bool] = Field(None)
     change_order: Optional[bool] = Field(None)
-    booking_confirmed: Optional[bool] = Field(None)
-    booking_declined: Optional[bool] = Field(None)
     cosmetolog: Optional[str] = Field(None, description="Specialist name")
     time_set_up: Optional[str] = Field(None, description="Booking time HH:MM")
     date_order: Optional[str] = Field(None, description="Booking date")

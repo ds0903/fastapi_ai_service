@@ -1,7 +1,6 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime, date, time, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, desc
 import logging
 
@@ -149,7 +148,15 @@ class BookingService:
             # Check if time slot is available (double-check both database and Google Sheets)
             logger.debug(f"Message ID: {message_id} - Checking slot availability: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}, duration={duration_slots}")
             
-            # FIRST check Google Sheets as primary source
+            # Check database availability first
+            if not self._is_slot_available(response.cosmetolog, booking_date, booking_time, duration_slots):
+                logger.warning(f"Message ID: {message_id} - Time slot not available in database: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}")
+                return {
+                    "success": False,
+                    "message": "Выбранное время уже занято"
+                }
+            
+            # Double-check with Google Sheets to prevent race conditions (async)
             try:
                 if not await self.sheets_service.is_slot_available_in_sheets_async(response.cosmetolog, booking_date, booking_time):
                     logger.warning(f"Message ID: {message_id} - Time slot not available in Google Sheets: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}")
@@ -162,17 +169,11 @@ class BookingService:
                 # CRITICAL: Do not allow booking if we can't verify sheets availability
                 return {
                     "success": False,
-                    "message": "Ошибка проверки доступности времени"
+                    "message": "Временная техническая ошибка. Попробуйте позже"
                 }
             
-            # Then check database as secondary validation
-            if not self._is_slot_available(response.cosmetolog, booking_date, booking_time, duration_slots):
-                logger.warning(f"Message ID: {message_id} - Time slot not available in database: specialist={response.cosmetolog}, date={booking_date}, time={booking_time}")
-                # Don't block if DB says busy but Sheets says free
-                logger.info(f"Message ID: {message_id} - Continuing despite DB conflict - Google Sheets is primary source")
-            
             # Create booking
-            end_time = datetime.combine(booking_date, booking_time) + timedelta(minutes=self.project_config.slot_duration_minutes* duration_slots)
+            end_time = datetime.combine(booking_date, booking_time) + timedelta(minutes=30 * duration_slots)
             logger.info(f"Message ID: {message_id} - Creating new booking: client_id={client_id}, specialist={response.cosmetolog}")
             logger.info(f"Message ID: {message_id} -   Service: {normalized_service} ({duration_slots} slots)")
             logger.info(f"Message ID: {message_id} -   Time: {booking_date} {booking_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
@@ -186,7 +187,7 @@ class BookingService:
                 # Проверяем все слоты, которые займет эта запись
                 slots_to_check = []
                 for i in range(duration_slots):
-                    check_time = (datetime.combine(booking_date, booking_time) + timedelta(minutes=self.project_config.slot_duration_minutes*i)).time()
+                    check_time = (datetime.combine(booking_date, booking_time) + timedelta(minutes=30*i)).time()
                     slots_to_check.append(check_time.strftime("%H:%M"))
                 
                 # Если хоть один слот занят - блокируем запись
@@ -224,17 +225,8 @@ class BookingService:
                 status="active"
             )
             
-            try:
-                self.db.add(booking)
-                self.db.commit()
-            except IntegrityError:
-                self.db.rollback()
-                logger.error(f"Message ID: {message_id} - IntegrityError: Slot already taken during commit")
-                return {
-                    "success": False,
-                    "message": "Это время только что заняли. Пожалуйста, выберите другое время.",
-                    "record_error": "Время было занято другим клиентом"
-                }
+            self.db.add(booking)
+            self.db.commit()
             self.db.refresh(booking)
             
             logger.info(f"Message ID: {message_id} - Booking created successfully: booking_id={booking.id}, client_id={client_id}")
@@ -362,25 +354,9 @@ class BookingService:
             booking.updated_at = datetime.utcnow()
             self.db.commit()
             
-            # Удаляем запись из таблицы Make.com для отмены напоминания
-            try:
-                make_date = booking.appointment_date.strftime("%d.%m.%Y")
-                make_time = booking.appointment_time.strftime("%H:%M")
-                make_deleted = await self.sheets_service.delete_booking_from_make_table(
-                    client_id,  # Telegram ID
-                    make_date,
-                    make_time
-                )
-                if make_deleted:
-                    logger.info(f"Message ID: {message_id} - Deleted booking from Make.com table")
-                else:
-                    logger.warning(f"Message ID: {message_id} - Could not delete from Make.com table")
-            except Exception as make_error:
-                logger.error(f"Message ID: {message_id} - Error deleting from Make.com table: {make_error}")
-            
             # Clear the specific booking slot in Google Sheets (with proper duration for multi-slot bookings)
             try:
-                duration_slots = booking.duration_minutes // self.project_config.slot_duration_minutes
+                duration_slots = booking.duration_minutes // 30
                 logger.debug(f"Message ID: {message_id} - Clearing booking slot in Google Sheets for {booking.specialist_name} ({duration_slots} slots)")
                 sheets_success = await self.sheets_service.clear_booking_slot_async(
                     booking.specialist_name, 
@@ -538,19 +514,6 @@ class BookingService:
                     normalized_service = old_booking.service_name
                     logger.info(f"Message ID: {message_id} - Keeping existing service '{old_booking.service_name}' with {duration_slots} slots")
             
-            # FIRST check Google Sheets as primary source of truth
-            sheets_available = await self.sheets_service.is_slot_available_in_sheets_async(
-                response.cosmetolog, new_date, new_time
-            )
-            if not sheets_available:
-                logger.info(f"Message ID: {message_id} - Slot {new_time} on {new_date} is occupied in Google Sheets")
-                return {
-                    "success": False,
-                    "message": "Выбранное время уже занято"
-                }
-            
-            # Then check local DB (excluding the current booking)
-
             # Check if new time slot is available (excluding the current booking)
             if not self._is_slot_available(response.cosmetolog, new_date, new_time, duration_slots, exclude_booking_id=old_booking.id):
                 return {
@@ -562,7 +525,7 @@ class BookingService:
             old_specialist = old_booking.specialist_name
             old_date = old_booking.appointment_date
             old_time = old_booking.appointment_time
-            old_duration_slots = old_booking.duration_minutes // self.project_config.slot_duration_minutes  # Calculate slots from duration
+            old_duration_slots = old_booking.duration_minutes // 30  # Calculate slots from duration
             
             # Update the booking
             old_booking.specialist_name = response.cosmetolog
@@ -575,38 +538,6 @@ class BookingService:
             old_booking.updated_at = datetime.utcnow()
             
             self.db.commit()
-            
-            # Синхронизация с таблицей Make.com при переносе записи
-            try:
-                # 1. Удаляем старую запись из таблицы Make.com
-                old_make_date = old_date.strftime("%d.%m.%Y")
-                old_make_time = old_time.strftime("%H:%M")
-                make_deleted = await self.sheets_service.delete_booking_from_make_table(
-                    client_id,  # Telegram ID
-                    old_make_date,
-                    old_make_time
-                )
-                if make_deleted:
-                    logger.info(f"Message ID: {message_id} - Deleted old booking from Make.com table")
-                
-                # 2. Создаем новую запись в таблице Make.com
-                make_booking_data = {
-                    'date': new_date.strftime("%d.%m.%Y"),
-                    'time': new_time.strftime("%H:%M"),
-                    'client_id': self.contact_send_id if hasattr(self, 'contact_send_id') else client_id,  # SendPulse ID если есть
-                    'messenger_client_id': client_id,  # Telegram ID
-                    'client_name': old_booking.client_name or "Клиент",
-                    'service': normalized_service,
-                    'specialist': response.cosmetolog
-                }
-                make_added = await self.sheets_service.add_booking_to_make_table_async(make_booking_data)
-                if make_added:
-                    logger.info(f"Message ID: {message_id} - Added new booking to Make.com table")
-                else:
-                    logger.warning(f"Message ID: {message_id} - Could not add new booking to Make.com table")
-                    
-            except Exception as make_error:
-                logger.error(f"Message ID: {message_id} - Error updating Make.com table during change: {make_error}")
             
             # Update Google Sheets - clear old slot and add new slot
             try:
@@ -660,7 +591,7 @@ class BookingService:
         # Generate all time slots that would be occupied
         occupied_slots = []
         for i in range(duration_slots):
-            slot_datetime = datetime.combine(booking_date, booking_time) + timedelta(minutes=self.project_config.slot_duration_minutes*i)
+            slot_datetime = datetime.combine(booking_date, booking_time) + timedelta(minutes=30*i)
             occupied_slots.append(slot_datetime.time())
         
         # Check for conflicts
@@ -680,9 +611,9 @@ class BookingService:
         
         for booking in existing_bookings:
             # Check if any of the required slots conflict with existing bookings
-            booking_duration_slots = booking.duration_minutes // self.project_config.slot_duration_minutes
+            booking_duration_slots = booking.duration_minutes // 30
             for i in range(booking_duration_slots):
-                existing_slot = datetime.combine(booking_date, booking.appointment_time) + timedelta(minutes=self.project_config.slot_duration_minutes*i)
+                existing_slot = datetime.combine(booking_date, booking.appointment_time) + timedelta(minutes=30*i)
                 if existing_slot.time() in occupied_slots:
                     return False
         
@@ -730,7 +661,7 @@ class BookingService:
                 client_name=booking.client_name,
                 service_name=booking.service_name,
                 phone=booking.client_phone,
-                duration_slots=booking.duration_minutes // self.project_config.slot_duration_minutes,
+                duration_slots=booking.duration_minutes // 30,
                 status=booking.status,
                 created_at=booking.created_at,
                 updated_at=booking.updated_at
