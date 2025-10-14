@@ -2,6 +2,8 @@ import json
 import re
 import asyncio
 import random
+import httpx
+import base64
 from typing import Dict, Any, Optional
 from datetime import datetime, date, timedelta
 from anthropic import AsyncAnthropic
@@ -43,6 +45,34 @@ class ClaudeService:
             
             # Simple counter for load balancing
             self.request_counter = 0
+    
+    async def _download_image_as_base64(self, url: str, message_id: str = None) -> Optional[dict]:
+        """Download image from URL and convert to base64 format for Claude Vision API"""
+        try:
+            logger.info(f"Message ID: {message_id} - Downloading image from URL: {url[:100]}...")
+            
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await client.get(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                response.raise_for_status()
+                
+                content_type = response.headers.get('content-type', 'image/jpeg')
+                image_data = base64.b64encode(response.content).decode('utf-8')
+                
+                logger.info(f"Message ID: {message_id} - Image downloaded successfully: {len(response.content)} bytes, type: {content_type}")
+                
+                return {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": content_type,
+                        "data": image_data
+                    }
+                }
+        except Exception as e:
+            logger.error(f"Message ID: {message_id} - Failed to download image from {url}: {e}")
+            return None
             
         except Exception as e:
             logger.error(f"Failed to initialize Claude clients: {e}")
@@ -114,7 +144,8 @@ class ClaudeService:
         user_prompt: str,
         max_tokens: int = 2000,
         use_hour_cache: bool = True,
-        message_id: str = None
+        message_id: str = None,
+        image_content: Optional[dict] = None
     ):
         """
         Make a Claude API request with 1-hour prompt caching support.
@@ -126,11 +157,20 @@ class ClaudeService:
             system_hash = hashlib.md5(system_prompt.encode()).hexdigest()[:8]
             logger.debug(f"Message ID: {message_id} - System prompt hash: {system_hash}, length: {len(system_prompt)}")
             
-            # Build messages
-            messages = [{"role": "user", "content": user_prompt}]
-            
-            # Build messages
-            messages = [{"role": "user", "content": user_prompt}]
+            # Build messages with multimodal support
+            if image_content:
+                # Multimodal message: text first, then image
+                messages = [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt},
+                        image_content
+                    ]
+                }]
+                logger.info(f"Message ID: {message_id} - Using multimodal content (text + image)")
+            else:
+                # Text-only message
+                messages = [{"role": "user", "content": user_prompt}]
             
             # Build kwargs
             kwargs = {
@@ -495,7 +535,8 @@ current_message: {current_message}"""
         slots_target_date: Optional[str] = None,
         zip_history: Optional[str] = None,
         record_error: Optional[str] = None,
-        newbie_status: int = 1  # ДОБАВЛЯЕМ ПАРАМЕТР
+        newbie_status: int = 1,
+        image_url: Optional[str] = None
     ) -> ClaudeMainResponse:
         """
         Module 3: Main response with proper caching separation
@@ -531,6 +572,13 @@ current_message: {current_message}"""
         
         logger.info(f"Message ID: {message_id} - Prompts: system={len(system_prompt)} chars (static), user={len(user_prompt)} chars (dynamic)")
         
+        # Download image if URL provided
+        image_content = None
+        if image_url:
+            logger.info(f"Message ID: {message_id} - Image URL detected, downloading...")
+            image_content = await self._download_image_as_base64(image_url, message_id)
+            if not image_content:
+                logger.warning(f"Message ID: {message_id} - Failed to download image, continuing without it")
         
         try:
             truncated_history = self._truncate_dialogue_for_logging(dialogue_history)
@@ -544,7 +592,8 @@ current_message: {current_message}"""
                     user_prompt=user_prompt,
                     max_tokens=2000,
                     use_hour_cache=True,
-                    message_id=message_id
+                    message_id=message_id,
+                    image_content=image_content
                 )
             # Use retry mechanism
             response = await self._retry_claude_request(make_request, max_retries=3, message_id=message_id)

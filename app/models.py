@@ -25,9 +25,43 @@ class SendPulseMessage(BaseModel):
     retry: bool = Field(default=False, description="Whether this is a retry attempt")
     tg_id: Optional[str] = Field(None, description="Telegram client ID")
     contact_send_id: Optional[str] = Field(None, description="SendPulse internal contact ID")
-    contact_send_id: Optional[str] = Field(None, description="SendPulse internal contact ID")
     response: str = Field(..., description="Message text from client")
     project_id: str = Field(..., description="Project identifier")
+    
+    def get_image_url(self) -> Optional[str]:
+        """Get image URL from message text (SendPulse WhatsApp format)"""
+        import re
+        # SendPulse media URLs
+        sendpulse_pattern = r'https://[\w\-\.]+/api/chatbots-service/whatsapp/messages/media\?[^\s]+'
+        match = re.search(sendpulse_pattern, self.response)
+        if match:
+            return match.group(0)
+        
+        # Other image URLs
+        url_pattern = r'https?://[^\s]+\.(jpg|jpeg|png|gif|webp)'
+        match = re.search(url_pattern, self.response, re.IGNORECASE)
+        if match:
+            return match.group(0)
+        
+        return None
+    
+    def get_text_without_image_url(self) -> str:
+        """Get message text with image URLs removed"""
+        import re
+        text = self.response
+        
+        # Remove SendPulse media URLs
+        sendpulse_pattern = r'https://[\w\-\.]+/api/chatbots-service/whatsapp/messages/media\?[^\s]+'
+        text = re.sub(sendpulse_pattern, '', text)
+        
+        # Remove other image URLs
+        url_pattern = r'https?://[^\s]+\.(jpg|jpeg|png|gif|webp)'
+        text = re.sub(url_pattern, '', text, flags=re.IGNORECASE)
+        
+        # Clean up extra whitespace
+        text = ' '.join(text.split())
+        
+        return text.strip()
 
 
 class MessageQueueItem(BaseModel):

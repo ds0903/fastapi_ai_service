@@ -640,7 +640,23 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     "pic": ""
                 }
             
-            logger.info(f"Message ID: {message_id} - Processing message: '{message_item.aggregated_message[:100]}...' for client_id={client_id}")
+            # Extract image URL from message if present
+            from app.models import SendPulseMessage
+            temp_message = SendPulseMessage(
+                date=datetime.now().strftime("%d.%m.%Y %H:%M"),
+                response=message_item.aggregated_message,
+                project_id=project_id
+            )
+            image_url = temp_message.get_image_url()
+            clean_message = temp_message.get_text_without_image_url() if image_url else message_item.aggregated_message
+            
+            if image_url:
+                logger.info(f"Message ID: {message_id} - Image URL detected in message: {image_url[:100]}...")
+                logger.info(f"Message ID: {message_id} - Clean message text: '{clean_message[:100]}...'")
+            else:
+                logger.debug(f"Message ID: {message_id} - No image URL found in message")
+            
+            logger.info(f"Message ID: {message_id} - Processing message: '{clean_message[:100]}...' for client_id={client_id}")
             
             # Update message status to processing
             logger.debug(f"Message ID: {message_id} - Updating message status to processing for message_id={message_item.id}")
@@ -649,6 +665,9 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             # Get dialogue history and zip_history
             logger.debug(f"Message ID: {message_id} - Getting dialogue history for client_id={client_id}")
             dialogue_history = get_dialogue_history(db, project_id, client_id, message_id)
+            
+            # Use clean message without image URL for dialogue and AI processing
+            current_message_text = clean_message if image_url else message_item.aggregated_message
             
             # Get compressed dialogue history (zip_history)
             from app.services.dialogue_archiving import DialogueArchivingService
@@ -672,7 +691,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 intent_result = await claude_service.detect_intent(
                     project_config,
                     dialogue_history,
-                    message_item.aggregated_message,
+                    current_message_text,
                     current_date,  # Добавляем
                     day_of_week,   # Добавляем
                     date_calendar,  # Добавляем календарь
@@ -717,7 +736,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 service_task = claude_service.identify_service(
                     project_config,
                     dialogue_history,
-                    message_item.aggregated_message,
+                    current_message_text,
                     message_id
                 )
                 tasks.append(service_task)
@@ -923,7 +942,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 main_response = await claude_service.generate_main_response(
                     project_config,
                     dialogue_history,
-                    message_item.aggregated_message,
+                    current_message_text,
                     current_date.strftime("%d.%m.%Y %H:%M"),
                     day_of_week, 
                     date_calendar,  # Добавляем календарь
@@ -934,7 +953,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     slots_target_date,  # Pass the target date information
                     zip_history,  # Pass compressed dialogue history
                     record_error,
-                    newbie_status=newbie_status
+                    newbie_status=newbie_status,
+                    image_url=image_url
                 )
                 logger.debug(f"Message ID: {message_id} - Main response generated for client_id={client_id}: activate_booking={main_response.activate_booking}, reject_order={main_response.reject_order}, change_order={main_response.change_order}")
             except Exception as e:
@@ -1067,6 +1087,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             # Save dialogue entry
             logger.debug(f"Message ID: {message_id} - Saving dialogue entries for client_id={client_id}")
             try:
+                # Save original message (may contain image URL)
                 save_dialogue_entry(db, project_id, client_id, message_item.original_message, "client", message_id)
                 save_dialogue_entry(db, project_id, client_id, main_response.gpt_response, "claude", message_id)
             except Exception as e:
