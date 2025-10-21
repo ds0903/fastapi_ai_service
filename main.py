@@ -162,6 +162,9 @@ def load_local_config() -> Dict[str, Any]:
 
 project_configs = {}
 
+# Global ClaudeService instance for load balancing between API keys
+global_claude_service = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize database
@@ -228,10 +231,21 @@ async def lifespan(app: FastAPI):
         sheets_task = asyncio.create_task(run_sheets_background_sync(project_configs["default"]))
         logger.info("Started Google Sheets background sync (every 5 min)")
         
+        # Initialize global ClaudeService for load balancing
+        global global_claude_service
+        global_claude_service = ClaudeService(db, default_config.slot_duration_minutes)
+        logger.info("Initialized global ClaudeService for load balancing between API keys")
+        logger.info("📊 Load balance stats available at: GET /admin/load-balance-stats")
+        
     finally:
         db.close()
     
     yield
+    
+    # Cleanup - log final stats
+    if global_claude_service:
+        final_stats = global_claude_service.get_load_balance_stats()
+        logger.info(f"🏁 FINAL LOAD BALANCE STATS: Total={final_stats['total_requests']}, Client1={final_stats['client1_percentage']}%, Client2={final_stats['client2_percentage']}%, Balance diff={final_stats['balance_difference']}%")
     
     # Cleanup
     logger.info("Shutting down dialogue compression task...")
@@ -623,7 +637,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             # Initialize services
             logger.debug(f"Message ID: {message_id} - Initializing services for client_id={client_id}")
             queue_service = MessageQueueService(db)
-            claude_service = ClaudeService(db, project_config.slot_duration_minutes)
+            # Use global ClaudeService instance for proper load balancing
+            claude_service = global_claude_service
             sheets_service = GoogleSheetsService(project_config)
             booking_service = BookingService(db, project_config, contact_send_id=contact_send_id)
             
@@ -1351,6 +1366,42 @@ async def trigger_dialogue_compression(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error triggering dialogue compression: {e}")
         return {"error": str(e)}
+
+
+@app.get("/admin/load-balance-stats")
+async def get_load_balance_stats():
+    """Get current load balancing statistics between Claude API keys"""
+    try:
+        if global_claude_service:
+            stats = global_claude_service.get_load_balance_stats()
+            
+            # Determine balance quality
+            if stats['balance_difference'] < 5:
+                quality = "✅ Excellent"
+            elif stats['balance_difference'] < 10:
+                quality = "⚠️ Good"
+            elif stats['balance_difference'] < 20:
+                quality = "🟡 Fair"
+            else:
+                quality = "❌ Poor"
+            
+            return {
+                "status": "success",
+                "balance_quality": quality,
+                "statistics": stats,
+                "message": f"Client 1: {stats['client1_percentage']}%, Client 2: {stats['client2_percentage']}%"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "ClaudeService not initialized yet"
+            }
+    except Exception as e:
+        logger.error(f"Error getting load balance stats: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 @app.post("/admin/reset-dialogues-archived")

@@ -50,6 +50,9 @@ class ClaudeService:
             self.client1_request_count = 0
             self.client2_request_count = 0
             
+            # Log every 10 requests for monitoring
+            self._last_stats_log = 0
+            
         except Exception as e:
             logger.error(f"Failed to initialize Claude clients: {e}")
             raise
@@ -86,6 +89,32 @@ class ClaudeService:
         """Increment and return request counter for load balancing"""
         self.request_counter += 1
         return self.request_counter
+    
+    def get_load_balance_stats(self) -> dict:
+        """Get load balancing statistics"""
+        total = self.client1_request_count + self.client2_request_count
+        if total == 0:
+            return {
+                "total_requests": 0,
+                "client1_requests": 0,
+                "client2_requests": 0,
+                "client1_percentage": 0,
+                "client2_percentage": 0,
+                "balance_difference": 0
+            }
+        
+        client1_pct = (self.client1_request_count / total) * 100
+        client2_pct = (self.client2_request_count / total) * 100
+        balance_diff = abs(client1_pct - 50.0)
+        
+        return {
+            "total_requests": total,
+            "client1_requests": self.client1_request_count,
+            "client2_requests": self.client2_request_count,
+            "client1_percentage": round(client1_pct, 1),
+            "client2_percentage": round(client2_pct, 1),
+            "balance_difference": round(balance_diff, 1)
+        }
     
 
     
@@ -239,6 +268,13 @@ class ClaudeService:
             total_requests = self.client1_request_count + self.client2_request_count
             balance_info = f"(Total: {total_requests}, Client1: {self.client1_request_count}, Client2: {self.client2_request_count})"
             logger.info(f"Message ID: {message_id} - 🔑 Using Claude API client {preferred_client_num} {balance_info}")
+            
+            # Log detailed stats every 10 requests
+            if total_requests % 10 == 0 and total_requests != self._last_stats_log:
+                self._last_stats_log = total_requests
+                stats = self.get_load_balance_stats()
+                logger.info(f"📊 LOAD BALANCE STATS: Total={stats['total_requests']}, Client1={stats['client1_percentage']}%, Client2={stats['client2_percentage']}%, Balance diff={stats['balance_difference']}%")
+            
             return client, preferred_client_num
         
         # Try alternative client
