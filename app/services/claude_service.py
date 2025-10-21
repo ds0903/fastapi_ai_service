@@ -46,6 +46,10 @@ class ClaudeService:
             # Simple counter for load balancing
             self.request_counter = 0
             
+            # Statistics counters
+            self.client1_request_count = 0
+            self.client2_request_count = 0
+            
         except Exception as e:
             logger.error(f"Failed to initialize Claude clients: {e}")
             raise
@@ -225,14 +229,30 @@ class ClaudeService:
         
         if not self._is_client_circuit_open(preferred_client_num):
             client = self.client1 if preferred_client_num == 1 else self.client2
-            logger.debug(f"Message ID: {message_id} - Using preferred client {preferred_client_num}")
+            
+            # Update statistics
+            if preferred_client_num == 1:
+                self.client1_request_count += 1
+            else:
+                self.client2_request_count += 1
+            
+            total_requests = self.client1_request_count + self.client2_request_count
+            balance_info = f"(Total: {total_requests}, Client1: {self.client1_request_count}, Client2: {self.client2_request_count})"
+            logger.info(f"Message ID: {message_id} - 🔑 Using Claude API client {preferred_client_num} {balance_info}")
             return client, preferred_client_num
         
         # Try alternative client
         alternative_client_num = 2 if preferred_client_num == 1 else 1
         if not self._is_client_circuit_open(alternative_client_num):
             client = self.client2 if alternative_client_num == 2 else self.client1
-            logger.warning(f"Message ID: {message_id} - Client {preferred_client_num} circuit open, using client {alternative_client_num}")
+            
+            # Update statistics for alternative client
+            if alternative_client_num == 1:
+                self.client1_request_count += 1
+            else:
+                self.client2_request_count += 1
+            
+            logger.warning(f"Message ID: {message_id} - ⚠️ Client {preferred_client_num} circuit open, switching to client {alternative_client_num}")
             return client, alternative_client_num
         
         # Both circuits open - use preferred anyway with warning
@@ -488,16 +508,19 @@ current_message: {current_message}"""
         logger.info(f"Message ID: {message_id} - Prompts: system={len(system_prompt)} chars (static), user={len(user_prompt)} chars (dynamic)")
         
         try:
-            response = await self._cached_claude_request(
-                    client=self.client1,
+            # Use retry mechanism with load balancing
+            response = await self._retry_claude_request(
+                lambda client: self._cached_claude_request(
+                    client=client,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     max_tokens=500,
                     use_hour_cache=True,
                     message_id=message_id
-                )
-            
-            # Use retry mechanism
+                ),
+                max_retries=3,
+                message_id=message_id
+            )
             
             raw_response = response.content[0].text
             logger.info(f"Message ID: {message_id} - Claude raw response for service identification: {raw_response}")
