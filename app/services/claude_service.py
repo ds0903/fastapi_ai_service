@@ -50,6 +50,10 @@ class ClaudeService:
             self.client1_request_count = 0
             self.client2_request_count = 0
             
+            # Token usage tracking for smart load balancing
+            self.client1_total_tokens = 0
+            self.client2_total_tokens = 0
+            
             # Log every 10 requests for monitoring
             self._last_stats_log = 0
             
@@ -92,28 +96,47 @@ class ClaudeService:
     
     def get_load_balance_stats(self) -> dict:
         """Get load balancing statistics"""
-        total = self.client1_request_count + self.client2_request_count
-        if total == 0:
+        total_requests = self.client1_request_count + self.client2_request_count
+        total_tokens = self.client1_total_tokens + self.client2_total_tokens
+        
+        if total_requests == 0:
             return {
                 "total_requests": 0,
                 "client1_requests": 0,
                 "client2_requests": 0,
                 "client1_percentage": 0,
                 "client2_percentage": 0,
-                "balance_difference": 0
+                "balance_difference": 0,
+                "total_tokens": 0,
+                "client1_tokens": 0,
+                "client2_tokens": 0,
+                "client1_token_percentage": 0,
+                "client2_token_percentage": 0,
+                "token_balance_difference": 0
             }
         
-        client1_pct = (self.client1_request_count / total) * 100
-        client2_pct = (self.client2_request_count / total) * 100
+        client1_pct = (self.client1_request_count / total_requests) * 100
+        client2_pct = (self.client2_request_count / total_requests) * 100
         balance_diff = abs(client1_pct - 50.0)
         
+        # Token-based percentages
+        client1_token_pct = (self.client1_total_tokens / total_tokens * 100) if total_tokens > 0 else 0
+        client2_token_pct = (self.client2_total_tokens / total_tokens * 100) if total_tokens > 0 else 0
+        token_balance_diff = abs(client1_token_pct - 50.0)
+        
         return {
-            "total_requests": total,
+            "total_requests": total_requests,
             "client1_requests": self.client1_request_count,
             "client2_requests": self.client2_request_count,
             "client1_percentage": round(client1_pct, 1),
             "client2_percentage": round(client2_pct, 1),
-            "balance_difference": round(balance_diff, 1)
+            "balance_difference": round(balance_diff, 1),
+            "total_tokens": total_tokens,
+            "client1_tokens": self.client1_total_tokens,
+            "client2_tokens": self.client2_total_tokens,
+            "client1_token_percentage": round(client1_token_pct, 1),
+            "client2_token_percentage": round(client2_token_pct, 1),
+            "token_balance_difference": round(token_balance_diff, 1)
         }
     
 
@@ -169,6 +192,30 @@ class ClaudeService:
                 logger.info(f"Message ID: {message_id} - Client 2 success - resetting failure count from {self.client2_failures}")
                 self.client2_failures = 0
                 self.client2_last_failure = None
+    
+    def _update_client_tokens(self, client_num: int, response, message_id: str = None):
+        """Update token usage for a client based on API response"""
+        if not hasattr(response, 'usage'):
+            logger.warning(f"Message ID: {message_id} - Response has no usage data")
+            return
+        
+        usage = response.usage
+        
+        # Просто сума всіх токенів
+        cache_creation = getattr(usage, 'cache_creation_input_tokens', 0)
+        cache_read = getattr(usage, 'cache_read_input_tokens', 0)
+        regular_input = getattr(usage, 'input_tokens', 0)
+        output = getattr(usage, 'output_tokens', 0)
+        
+        total_tokens = cache_creation + cache_read + regular_input + output
+        
+        # Update total for the client
+        if client_num == 1:
+            self.client1_total_tokens += total_tokens
+            logger.info(f"Message ID: {message_id} - Client 1 tokens: +{total_tokens} | Total: {self.client1_total_tokens}")
+        else:
+            self.client2_total_tokens += total_tokens
+            logger.info(f"Message ID: {message_id} - Client 2 tokens: +{total_tokens} | Total: {self.client2_total_tokens}")
     
     async def _cached_claude_request(
         self,
@@ -252,9 +299,13 @@ class ClaudeService:
             raise
 
     def _get_available_claude_client(self, counter: int, message_id: str = None) -> tuple[AsyncAnthropic, int]:
-        """Get available Claude client with circuit breaker logic"""
-        # Try preferred client first
-        preferred_client_num = 1 if counter % 2 == 0 else 2
+        """Get available Claude client with TOKEN-BASED load balancing and circuit breaker logic"""
+        # Вибираємо клієнта з МЕНШОЮ кількістю токенів (не по кількості запитів!)
+        # Це забезпечує справедливе балансування навантаження по фактичним витратам
+        if self.client1_total_tokens <= self.client2_total_tokens:
+            preferred_client_num = 1
+        else:
+            preferred_client_num = 2
         
         if not self._is_client_circuit_open(preferred_client_num):
             client = self.client1 if preferred_client_num == 1 else self.client2
@@ -266,14 +317,15 @@ class ClaudeService:
                 self.client2_request_count += 1
             
             total_requests = self.client1_request_count + self.client2_request_count
-            balance_info = f"(Total: {total_requests}, Client1: {self.client1_request_count}, Client2: {self.client2_request_count})"
+            total_tokens = self.client1_total_tokens + self.client2_total_tokens
+            balance_info = f"(Requests: C1={self.client1_request_count}, C2={self.client2_request_count} | Tokens: C1={self.client1_total_tokens}, C2={self.client2_total_tokens}, Total={total_tokens})"
             logger.info(f"Message ID: {message_id} - 🔑 Using Claude API client {preferred_client_num} {balance_info}")
             
-            # Log detailed stats every 10 requests
-            if total_requests % 10 == 0 and total_requests != self._last_stats_log:
+            # Log detailed stats every 5 requests для кращого моніторингу
+            if total_requests % 5 == 0 and total_requests != self._last_stats_log:
                 self._last_stats_log = total_requests
                 stats = self.get_load_balance_stats()
-                logger.info(f"📊 LOAD BALANCE STATS: Total={stats['total_requests']}, Client1={stats['client1_percentage']}%, Client2={stats['client2_percentage']}%, Balance diff={stats['balance_difference']}%")
+                logger.info(f"📊 TOKEN BALANCE STATS: Requests: C1={stats['client1_percentage']}%, C2={stats['client2_percentage']}% (diff={stats['balance_difference']}%) | Tokens: C1={stats['client1_token_percentage']}%, C2={stats['client2_token_percentage']}% (diff={stats['token_balance_difference']}%)")
             
             return client, preferred_client_num
         
@@ -291,9 +343,10 @@ class ClaudeService:
             logger.warning(f"Message ID: {message_id} - ⚠️ Client {preferred_client_num} circuit open, switching to client {alternative_client_num}")
             return client, alternative_client_num
         
-        # Both circuits open - use preferred anyway with warning
-        client = self.client1 if preferred_client_num == 1 else self.client2
-        logger.error(f"Message ID: {message_id} - Both clients have circuit breakers open, using client {preferred_client_num} anyway")
+        # Both circuits open - use the one with fewer tokens anyway
+        client = self.client1 if self.client1_total_tokens <= self.client2_total_tokens else self.client2
+        preferred_client_num = 1 if self.client1_total_tokens <= self.client2_total_tokens else 2
+        logger.error(f"Message ID: {message_id} - Both clients have circuit breakers open, using client {preferred_client_num} (fewer tokens) anyway")
         return client, preferred_client_num
     
     async def _retry_claude_request(self, request_func, max_retries: int = 3, message_id: str = None):
@@ -309,6 +362,9 @@ class ClaudeService:
                 
                 # Execute the request
                 result = await request_func(client)
+                
+                # Update token usage for this client
+                self._update_client_tokens(client_num, result, message_id)
                 
                 # Record success
                 self._record_client_success(client_num, message_id)
@@ -690,7 +746,8 @@ current_message: {current_message}"""
     async def compress_dialogue(
         self,
         project_config: ProjectConfig,
-        dialogue_history: str
+        dialogue_history: str,
+        message_id: str = None
     ) -> str:
         """
         Module 4: Dialogue compression
@@ -707,12 +764,12 @@ current_message: {current_message}"""
                     messages=[{"role": "user", "content": prompt}]
                 )
             
-            # Use retry mechanism
-            response = await self._retry_claude_request(make_request, max_retries=2, message_id=None)
+            # Use retry mechanism (це вже автоматично оновить токени)
+            response = await self._retry_claude_request(make_request, max_retries=2, message_id=message_id)
             return response.content[0].text.strip()
             
         except Exception as e:
-            logger.warning(f"Dialogue compression failed: {e}, using fallback")
+            logger.warning(f"Message ID: {message_id} - Dialogue compression failed: {e}, using fallback")
             return dialogue_history[:500] + "..."
     
     def _build_intent_detection_prompt(
