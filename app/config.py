@@ -63,7 +63,8 @@ class Settings(BaseSettings):
     smtp_port: int = Field(default=587)
     email_host_user: str = Field(default="")
     email_host_password: str = Field(default="")
-    admin_email: str = Field(default="")
+    admin_emails: str = Field(default="")  # Comma-separated list
+    consultant_emails: str = Field(default="")  # Comma-separated list
     
     class Config:
         env_file = ".env"

@@ -1076,17 +1076,18 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             
             # Process human consultant request
             if main_response.human_consultant_requested:
-                logger.info(f"Message ID: {message_id} - Client requested human consultant, sending email notification")
+                logger.info(f"Message ID: {message_id} - Client requested human consultant (type={main_response.human_consultant_requested}), sending email notification")
                 try:
                     email_service = EmailService()
                     await email_service.send_human_consultant_request(
+                        request_type=main_response.human_consultant_requested,
                         client_id=client_id,
                         client_name=main_response.name,
                         phone=main_response.phone,
                         last_message=current_message_text,
                         message_id=message_id
                     )
-                    logger.info(f"Message ID: {message_id} - Human consultant request email sent for client_id={client_id}")
+                    logger.info(f"Message ID: {message_id} - Human consultant request email sent for client_id={client_id}, type={main_response.human_consultant_requested}")
                 except Exception as e:
                     error_count += 1
                     logger.error(f"Message ID: {message_id} - Error sending human consultant request email for client_id={client_id}: {e}")
