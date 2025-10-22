@@ -61,8 +61,8 @@ class Settings(BaseSettings):
     # Email Configuration
     smtp_host: str = Field(default="smtp.gmail.com")
     smtp_port: int = Field(default=587)
-    smtp_user: str = Field(default="")
-    smtp_password: str = Field(default="")
+    email_host_user: str = Field(default="")
+    email_host_password: str = Field(default="")
     admin_email: str = Field(default="")
     
     class Config:
