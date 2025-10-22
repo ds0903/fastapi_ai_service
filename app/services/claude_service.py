@@ -1129,7 +1129,8 @@ current_message: {current_message}"""
                 "procedure": result.get("procedure"),
                 "phone": result.get("phone"),
                 "name": result.get("name"),
-                "feedback": result.get("feedback")
+                "feedback": result.get("feedback"),
+                "human_consultant_requested": result.get("human_consultant_requested")
             }
             logger.debug(f"Message ID: {message_id} - Main response parsed successfully: {parsed_result}")
             return parsed_result

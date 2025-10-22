@@ -30,6 +30,7 @@ from app.utils.date_calendar import generate_calendar_for_claude
 from app.services.claude_service import ClaudeService
 from app.services.google_sheets import GoogleSheetsService
 from app.services.booking_service import BookingService
+from app.services.email_service import EmailService
 
 # Кеш для хранения данных pending подтверждений
 # Формат: {client_id: {"date": "...", "time": "...", "specialist": "...", "service": "...", "timestamp": ...}}
@@ -1072,6 +1073,24 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     error_count += 1
                     logger.error(f"Message ID: {message_id} - Error processing feedback for client_id={client_id}: {e}")
                     # Continue anyway - feedback errors shouldn't break the main flow
+            
+            # Process human consultant request
+            if main_response.human_consultant_requested:
+                logger.info(f"Message ID: {message_id} - Client requested human consultant, sending email notification")
+                try:
+                    email_service = EmailService()
+                    await email_service.send_human_consultant_request(
+                        client_id=client_id,
+                        client_name=main_response.name,
+                        phone=main_response.phone,
+                        last_message=current_message_text,
+                        message_id=message_id
+                    )
+                    logger.info(f"Message ID: {message_id} - Human consultant request email sent for client_id={client_id}")
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"Message ID: {message_id} - Error sending human consultant request email for client_id={client_id}: {e}")
+                    # Continue anyway - email errors shouldn't break the main flow
             
             def format_time_difference(timestamp1: datetime, timestamp2: datetime) -> str:
                 """Format time difference between two timestamps in human-readable format"""

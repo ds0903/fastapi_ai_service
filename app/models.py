@@ -117,6 +117,7 @@ class ClaudeMainResponse(BaseModel):
     phone: Optional[str] = Field(None, description="Client phone")
     name: Optional[str] = Field(None, description="Client name")
     feedback: Optional[str] = Field(None, description="Client feedback")
+    human_consultant_requested: Optional[int] = Field(None, description="1 if client wants to talk to human consultant")
 
 
 class BookingRecord(BaseModel):

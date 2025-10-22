@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     max_messages_per_minute: int = Field(default=60)
     flood_protection_threshold: int = Field(default=10)
     
+    # Email Configuration
+    smtp_host: str = Field(default="smtp.gmail.com")
+    smtp_port: int = Field(default=587)
+    smtp_user: str = Field(default="")
+    smtp_password: str = Field(default="")
+    admin_email: str = Field(default="")
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
