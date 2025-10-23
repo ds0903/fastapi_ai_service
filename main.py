@@ -1085,7 +1085,8 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                         client_name=main_response.name,
                         phone=main_response.phone,
                         last_message=current_message_text,
-                        message_id=message_id
+                        message_id=message_id,
+                        contact_send_id=contact_send_id
                     )
                     logger.info(f"Message ID: {message_id} - Human consultant request email sent for client_id={client_id}, type={main_response.human_consultant_requested}")
                 except Exception as e:

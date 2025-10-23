@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     sendpulse_webhook_secret: str = Field(default="")
     sendpulse_api_url: str = Field(default="https://api.sendpulse.com/your-endpoint")
     sendpulse_api_token: str = Field(default="")
+    sendpulse_bot_id: str = Field(default="68a711000f8cbe2faf0879da")
     
     # Application
     debug: bool = Field(default=True)

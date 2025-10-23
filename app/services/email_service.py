@@ -18,6 +18,7 @@ class EmailService:
         self.smtp_port = settings.smtp_port
         self.smtp_user = settings.email_host_user
         self.smtp_password = settings.email_host_password
+        self.sendpulse_bot_id = settings.sendpulse_bot_id
         
         # Parse comma-separated email lists
         self.admin_emails = [e.strip() for e in settings.admin_emails.split(',') if e.strip()]
@@ -47,7 +48,8 @@ class EmailService:
         client_name: Optional[str] = None,
         phone: Optional[str] = None,
         last_message: Optional[str] = None,
-        message_id: Optional[str] = None
+        message_id: Optional[str] = None,
+        contact_send_id: Optional[str] = None
     ) -> bool:
         """
         Send email notification when client requests human consultant
@@ -98,6 +100,11 @@ class EmailService:
             if last_message:
                 body_parts.append(f"<p><strong>Останнє повідомлення:</strong></p>")
                 body_parts.append(f"<blockquote>{last_message}</blockquote>")
+            
+            # Додаємо посилання на чат в SendPulse
+            if contact_send_id:
+                chat_url = f"https://login.sendpulse.com/chatbots/chats?bot_id={self.sendpulse_bot_id}&channel=whatsapp&status=all&assignee=all&contact_id={contact_send_id}"
+                body_parts.append(f"<p><strong>Посилання на чат:</strong> <a href='{chat_url}'>Відкрити чат в SendPulse</a></p>")
             
             body_parts.append(f"<p>Клієнт очікує на відповідь від реального {request_type_name}.</p>")
             body_parts.append("<p>Будь ласка, зв'яжіться з клієнтом якомога швидше.</p>")
