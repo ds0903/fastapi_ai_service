@@ -103,7 +103,8 @@ class EmailService:
             
             # Додаємо посилання на чат в SendPulse
             if contact_send_id:
-                chat_url = f"https://login.sendpulse.com/chatbots/chats?bot_id={self.sendpulse_bot_id}&channel=whatsapp&status=all&assignee=all&contact_id={contact_send_id}"
+                channel = settings.messenger_channel.lower()
+                chat_url = f"https://login.sendpulse.com/chatbots/chats?bot_id={self.sendpulse_bot_id}&channel={channel}&status=all&assignee=all&contact_id={contact_send_id}"
                 body_parts.append(f"<p><strong>Посилання на чат:</strong> <a href='{chat_url}'>Відкрити чат в SendPulse</a></p>")
             
             body_parts.append(f"<p>Клієнт очікує на відповідь від реального {request_type_name}.</p>")

@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     sendpulse_api_url: str = Field(default="https://api.sendpulse.com/your-endpoint")
     sendpulse_api_token: str = Field(default="")
     sendpulse_bot_id: str = Field(default="68a711000f8cbe2faf0879da")
+    messenger_channel: str = Field(default="telegram")  # "whatsapp" or "telegram"
     
     # Application
     debug: bool = Field(default=True)
@@ -81,6 +82,7 @@ class ProjectConfig:
         self.database_table_name = f"bookings_{project_id}"
         self.google_sheet_id = settings.google_sheet_id
         self.google_sheet_make_id = getattr(settings, "google_sheet_make_id", "")
+        self.google_drive_folder_id = ""
         self.slot_duration_minutes = settings.slot_duration_minutes
         self.claude_prompts = get_all_prompts()
         self.services = {}  # service_name -> duration_in_slots
