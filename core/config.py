@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import List, Dict, Any
 import os
-from app.utils.prompt_loader import get_prompt, get_all_prompts
+from core.utils.prompt_loader import get_prompt, get_all_prompts
 
 
 class Settings(BaseSettings):
@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     
     # Telegram Bot (aiogram)
     telegram_bot_token: str = Field(default="")
+    
+    # WhatsApp
+    whatsapp_token: str = Field(default="")
+    whatsapp_phone_number_id: str = Field(default="")
+    whatsapp_verify_token: str = Field(default="")
+    
+    # Viber
+    viber_token: str = Field(default="")
+    viber_webhook_url: str = Field(default="")
     
     # SendPulse (deprecated - keeping for backwards compatibility)
     sendpulse_webhook_secret: str = Field(default="")

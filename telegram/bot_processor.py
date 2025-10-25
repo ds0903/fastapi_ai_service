@@ -7,16 +7,16 @@ import logging
 from datetime import datetime, date, time
 from typing import Dict, Any, Optional
 
-from app.database import SessionLocal
-from app.services.message_queue import MessageQueueService
-from app.services.claude_service import ClaudeService
-from app.services.google_sheets import GoogleSheetsService
-from app.services.booking_service import BookingService
-from app.services.email_service import EmailService
-from app.services.dialogue_archiving import DialogueArchivingService
-from app.utils.date_calendar import generate_calendar_for_claude
-from app.models import MessageStatus
-from app.database import Dialogue, BookingError
+from telegram.database import SessionLocal
+from telegram.services.message_queue import MessageQueueService
+from telegram.services.claude_service import ClaudeService
+from telegram.services.google_sheets import GoogleSheetsService
+from telegram.services.booking_service import BookingService
+from telegram.services.email_service import EmailService
+from telegram.services.dialogue_archiving import DialogueArchivingService
+from telegram.utils.date_calendar import generate_calendar_for_claude
+from telegram.models import MessageStatus
+from telegram.database import Dialogue, BookingError
 import pytz
 
 logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ async def process_message_async(
             }
         
         # Extract image URL if present
-        from app.models import SendPulseMessage
+        from telegram.models import SendPulseMessage
         temp_message = SendPulseMessage(
             date=datetime.now().strftime("%d.%m.%Y %H:%M"),
             response=message_item.aggregated_message,
@@ -270,7 +270,7 @@ async def process_message_async(
             if isinstance(results[0], Exception):
                 error_count += 1
                 logger.error(f"Message ID: {message_id} - Service identification error: {results[0]}")
-                from app.models import ServiceIdentificationResult
+                from telegram.models import ServiceIdentificationResult
                 service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
             
             if len(results) > 1 and slot_task:
@@ -289,7 +289,7 @@ async def process_message_async(
             
             # Recalculate slots if needed
             if service_result and service_result.time_fraction != 1 and available_slots:
-                from app.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
+                from telegram.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
                 original_available_slots = dict(available_slots)
                 available_slots = apply_duration_to_all_specialists(available_slots, service_result.time_fraction)
                 if reserved_slots:

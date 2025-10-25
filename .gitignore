@@ -81,6 +81,8 @@ Thumbs.db
 # Log files
 *.log
 logs/
+bot.log
+messenger_bots.log
 
 # Credentials and sensitive data
 credentials.json

@@ -17,20 +17,20 @@ import locale
 import pytz
 from pytz import timezone
 
-from app.database import get_db, create_tables, SessionLocal, Dialogue  
-from app.config import settings, ProjectConfig
-from app.models import (
+from telegram.database import get_db, create_tables, SessionLocal, Dialogue
+from telegram.config import settings, ProjectConfig
+from telegram.models import (
     SendPulseMessage, 
     WebhookResponse, 
     ProjectStats,
     MessageStatus
 )
-from app.services.message_queue import MessageQueueService
-from app.utils.date_calendar import generate_calendar_for_claude
-from app.services.claude_service import ClaudeService
-from app.services.google_sheets import GoogleSheetsService
-from app.services.booking_service import BookingService
-from app.services.email_service import EmailService
+from telegram.services.message_queue import MessageQueueService
+from telegram.utils.date_calendar import generate_calendar_for_claude
+from telegram.services.claude_service import ClaudeService
+from telegram.services.google_sheets import GoogleSheetsService
+from telegram.services.booking_service import BookingService
+from telegram.services.email_service import EmailService
 
 # Кеш для хранения данных pending подтверждений
 # Формат: {client_id: {"date": "...", "time": "...", "specialist": "...", "service": "...", "timestamp": ...}}
@@ -42,7 +42,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('app.log', encoding='utf-8')
+        logging.FileHandler('telegram.log', encoding='utf-8')
     ]
 )
 
@@ -207,7 +207,7 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Loaded configuration for project '{project_id}'")
         
         # Create database record for default project if it doesn't exist
-        from app.database import Project
+        from telegram.database import Project
         existing_project = db.query(Project).filter(Project.project_id == "default").first()
         if not existing_project:
             db_project = Project(
@@ -223,12 +223,12 @@ async def lifespan(app: FastAPI):
             logger.info("Default project already exists in database")
         
         # Start dialogue compression background task
-        from app.services.dialogue_archiving import run_dialogue_compression_task
+        from telegram.services.dialogue_archiving import run_dialogue_compression_task
         compression_task = asyncio.create_task(run_dialogue_compression_task(project_configs))
         logger.info("Started dialogue compression background task")
         
         # Start Google Sheets background sync
-        from app.services.sheets_sync import run_sheets_background_sync
+        from telegram.services.sheets_sync import run_sheets_background_sync
         sheets_task = asyncio.create_task(run_sheets_background_sync(project_configs["default"]))
         logger.info("Started Google Sheets background sync (every 5 min)")
         
@@ -478,7 +478,7 @@ async def sendpulse_webhook(
             )
         
         # Ensure project exists in database (create if doesn't exist)
-        from app.database import Project
+        from telegram.database import Project
         existing_project = db.query(Project).filter(Project.project_id == message.project_id).first()
         if not existing_project:
             logger.info(f"Message ID: {message_id} - Creating new project in database: {message.project_id}")
@@ -619,7 +619,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
     
     try:
         # Get new database session for processing
-        from app.database import SessionLocal
+        from telegram.database import SessionLocal
         db = SessionLocal()
         
         try:
@@ -657,7 +657,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 }
             
             # Extract image URL from message if present
-            from app.models import SendPulseMessage
+            from telegram.models import SendPulseMessage
             temp_message = SendPulseMessage(
                 date=datetime.now().strftime("%d.%m.%Y %H:%M"),
                 response=message_item.aggregated_message,
@@ -686,7 +686,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             current_message_text = clean_message if image_url else message_item.aggregated_message
             
             # Get compressed dialogue history (zip_history)
-            from app.services.dialogue_archiving import DialogueArchivingService
+            from telegram.services.dialogue_archiving import DialogueArchivingService
             dialogue_service = DialogueArchivingService()
             zip_history = dialogue_service.get_zip_history(db, project_id, client_id)
             logger.debug(f"Message ID: {message_id} - Got zip_history for client_id={client_id}: {len(zip_history) if zip_history else 0} characters")
@@ -720,17 +720,17 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 error_count += 1
                 logger.error(f"Message ID: {message_id} - Error in intent detection for client_id={client_id}: {e}")
                 # Continue with default intent
-                from app.models import IntentDetectionResult
+                from telegram.models import IntentDetectionResult
                 intent_result = IntentDetectionResult(waiting=1)
                 # Ensure intent_result is not None
                 if intent_result is None:
-                    from app.models import IntentDetectionResult
+                    from telegram.models import IntentDetectionResult
                     intent_result = IntentDetectionResult(waiting=1)            
 
             # Steps 2 & 3: Run service identification and slot fetching in parallel when possible
             # Ensure intent_result is not None
             if intent_result is None:
-                from app.models import IntentDetectionResult
+                from telegram.models import IntentDetectionResult
                 intent_result = IntentDetectionResult(waiting=1)
             service_result = None
             available_slots = {}
@@ -811,7 +811,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     if isinstance(results[0], Exception):
                         error_count += 1
                         logger.error(f"Message ID: {message_id} - Error in parallel service identification for client_id={client_id}: {results[0]}")
-                        from app.models import ServiceIdentificationResult
+                        from telegram.models import ServiceIdentificationResult
                         service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
                     
                     if len(results) > 1 and slot_task:
@@ -851,7 +851,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     error_count += 1	
                     logger.error(f"Message ID: {message_id} - Error in parallel processing for client_id={client_id}: {e}")
                     # Fallback to default values
-                    from app.models import ServiceIdentificationResult
+                    from telegram.models import ServiceIdentificationResult
                     service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
                     client_bookings = ""
                 
@@ -859,7 +859,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 # Локальный пересчет слотов вместо повторного запроса к Google Sheets
                 if service_result and service_result.time_fraction != 1 and available_slots:
                     logger.info(f"Message ID: {message_id} - Starting local slot recalculation for time_fraction={service_result.time_fraction}")
-                    from app.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
+                    from telegram.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
                     
                     # Логгируем слоты ДО пересчета
                     for spec, slots in available_slots.items():
@@ -913,7 +913,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             try:
                 # Получаем последний record_error если есть
                 record_error = None
-                from app.database import Dialogue
+                from telegram.database import Dialogue
                 last_error = db.query(Dialogue).filter(
                     Dialogue.client_id == client_id,
                     Dialogue.project_id == project_id,
@@ -944,7 +944,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     newbie_status = 1
                 
                 # Получаем ошибку предыдущей записи из БД
-                from app.database import BookingError
+                from telegram.database import BookingError
                 booking_error = db.query(BookingError).filter_by(client_id=client_id).first()
                 record_error = booking_error.error_message if booking_error else None
                 if record_error:
@@ -1003,7 +1003,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 error_msg = booking_result.get("message", "")
                 if error_msg and error_msg not in ["", "None", "No booking action required"]:
                     # Сохраняем в БД
-                    from app.database import BookingError
+                    from telegram.database import BookingError
                     existing_error = db.query(BookingError).filter_by(client_id=client_id).first()
                     if existing_error:
                         existing_error.error_message = error_msg
@@ -1015,7 +1015,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     logger.info(f"Message ID: {message_id} - Saved booking error to DB for {client_id}: {error_msg}")
             elif booking_result and booking_result.get("success"):
                 # Удаляем ошибку из БД при успешной записи
-                from app.database import BookingError
+                from telegram.database import BookingError
                 db.query(BookingError).filter_by(client_id=client_id).delete()
                 db.commit()
                 logger.info(f"Message ID: {message_id} - Cleared booking error from DB for {client_id}") 
@@ -1173,7 +1173,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
         logger.error(f"Message ID: {message_id} - Error processing message for client_id={client_id}: {e}", exc_info=True)
         # Update message status to failed
         try:
-            from app.database import SessionLocal
+            from telegram.database import SessionLocal
             db = SessionLocal()
             queue_service = MessageQueueService(db)
             logger.debug(f"Message ID: {message_id} - Marking message as cancelled due to error for queue_item_id={queue_item_id}")
@@ -1193,7 +1193,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
 
 def get_dialogue_history(db: Session, project_id: str, client_id: str, message_id: str) -> str:
     """Get recent dialogue history (last 24 hours) for a client"""
-    from app.services.dialogue_archiving import DialogueArchivingService
+    from telegram.services.dialogue_archiving import DialogueArchivingService
     
     logger.debug(f"Message ID: {message_id} - Getting recent dialogue history for client_id={client_id}, project_id={project_id}")
     
@@ -1207,7 +1207,7 @@ def get_dialogue_history(db: Session, project_id: str, client_id: str, message_i
 
 def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: str, role: str, message_id: str):
     """Save a dialogue entry using the new dialogue management system"""
-    from app.services.dialogue_archiving import DialogueArchivingService
+    from telegram.services.dialogue_archiving import DialogueArchivingService
     
     logger.debug(f"Message ID: {message_id} - Saving dialogue entry: client_id={client_id}, role={role}, message_length={len(message)}")
     
@@ -1312,7 +1312,7 @@ def extract_date_from_context(dialogue_history: str, zip_history: str) -> Option
 @app.get("/projects/{project_id}/stats", response_model=ProjectStats)
 async def get_project_stats(project_id: str, db: Session = Depends(get_db)):
     """Get statistics for a project"""
-    from app.database import MessageQueue, Booking
+    from telegram.database import MessageQueue, Booking
     
     total_messages = db.query(MessageQueue).filter(
         MessageQueue.project_id == project_id
@@ -1370,7 +1370,7 @@ async def get_project_config(project_id: str):
 async def trigger_dialogue_compression(db: Session = Depends(get_db)):
     """Manually trigger dialogue compression for testing"""
     try:
-        from app.services.dialogue_archiving import DialogueArchivingService
+        from telegram.services.dialogue_archiving import DialogueArchivingService
         
         compression_service = DialogueArchivingService()
         
@@ -1454,7 +1454,7 @@ async def sheets_webhook(request: Request):
             value = data.get("value")
             
             logger.info(f"Sheets update: {sheet_name}[{row},{column}] = {value}")
-            from app.services.sheets_sync import SheetsSyncService
+            from telegram.services.sheets_sync import SheetsSyncService
             sync_service = SheetsSyncService(db)
             
             slot_data = sync_service.parse_sheet_update(data)
@@ -1472,7 +1472,7 @@ async def sheets_webhook(request: Request):
 async def reset_dialogues_archived(db: Session = Depends(get_db)):
     """Reset archived status of recent dialogues for testing"""
     try:
-        from app.database import Dialogue
+        from telegram.database import Dialogue
         from datetime import datetime, timedelta
         
         # Reset dialogues from last 24 hours to unarchived for testing

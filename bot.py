@@ -25,8 +25,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 # Application imports
-from app.config import settings, ProjectConfig
-from app.database import create_tables, SessionLocal
+from telegram.config import settings, ProjectConfig
+from telegram.database import create_tables, SessionLocal
 
 # Global project configs (MUST BE INITIALIZED BEFORE HANDLER IMPORTS!)
 project_configs: Dict[str, ProjectConfig] = {}
@@ -104,7 +104,7 @@ async def setup_bot() -> None:
     # Create database record for default project
     db = SessionLocal()
     try:
-        from app.database import Project
+        from telegram.database import Project
         existing_project = db.query(Project).filter(Project.project_id == "default").first()
         if not existing_project:
             db_project = Project(
@@ -122,7 +122,7 @@ async def setup_bot() -> None:
         db.close()
     
     # Initialize global ClaudeService
-    from app.services.claude_service import ClaudeService
+    from telegram.services.claude_service import ClaudeService
     db = SessionLocal()
     try:
         global_claude_service = ClaudeService(db, default_config.slot_duration_minutes)
@@ -134,12 +134,12 @@ async def setup_bot() -> None:
     logger.info("🔄 Starting background tasks...")
     
     # Dialogue compression
-    from app.services.dialogue_archiving import run_dialogue_compression_task
+    from telegram.services.dialogue_archiving import run_dialogue_compression_task
     asyncio.create_task(run_dialogue_compression_task(project_configs))
     logger.info("✅ Started dialogue compression task")
     
     # Google Sheets sync
-    from app.services.sheets_sync import run_sheets_background_sync
+    from telegram.services.sheets_sync import run_sheets_background_sync
     asyncio.create_task(run_sheets_background_sync(project_configs["default"]))
     logger.info("✅ Started Google Sheets sync task")
     
@@ -164,9 +164,9 @@ async def main():
     await setup_bot()
     
     # NOW import handlers (after project_configs is initialized)
-    from app.handlers import start_router, messages_router
-    from app.handlers.messages import init_handler
-    from app.middlewares import LoggingMiddleware
+    from telegram.handlers import start_router, messages_router
+    from telegram.handlers.messages import init_handler
+    from telegram.middlewares import LoggingMiddleware
     
     # Initialize message handler with project configs
     init_handler(project_configs, global_claude_service)

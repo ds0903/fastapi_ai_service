@@ -8,9 +8,9 @@ import random
 import string
 from datetime import datetime
 
-from app.database import SessionLocal
-from app.services.message_queue import MessageQueueService
-from app.models import MessageStatus, SendPulseMessage
+from telegram.database import SessionLocal
+from telegram.services.message_queue import MessageQueueService
+from telegram.models import MessageStatus, SendPulseMessage
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -83,7 +83,7 @@ async def handle_text_message(message: Message):
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         
         # Process message - import here to avoid circular import
-        from app.bot_processor import process_message_async
+        from telegram.bot_processor import process_message_async
         
         logger.info(f"🤖 Starting AI processing for message {message_id}")
         response_data = await process_message_async(

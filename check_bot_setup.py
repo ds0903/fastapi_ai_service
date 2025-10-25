@@ -69,7 +69,7 @@ def check_setup():
     
     # Check database connection
     try:
-        from app.database import engine
+        from telegram.database import engine
         with engine.connect() as conn:
             print("✅ Database connection successful")
     except Exception as e:
