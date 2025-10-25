@@ -27,7 +27,10 @@ class Settings(BaseSettings):
         "https://www.googleapis.com/auth/drive"
     ])
     
-    # SendPulse
+    # Telegram Bot (aiogram)
+    telegram_bot_token: str = Field(default="")
+    
+    # SendPulse (deprecated - keeping for backwards compatibility)
     sendpulse_webhook_secret: str = Field(default="")
     sendpulse_api_url: str = Field(default="https://api.sendpulse.com/your-endpoint")
     sendpulse_api_token: str = Field(default="")
@@ -134,4 +137,4 @@ class ProjectConfig:
 
 
 # Initialize global settings instance
-settings = Settings() 
+settings = Settings()
