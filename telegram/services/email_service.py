@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 from typing import Optional, List
 
-from app.config import settings
+from telegram.config import settings
 
 logger = logging.getLogger(__name__)
 

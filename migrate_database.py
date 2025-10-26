@@ -6,11 +6,11 @@ Database migration script to add zip_history columns
 import sys
 import os
 
-# Add the app directory to Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'app'))
+# Add the telegram directory to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'telegram'))
 
 from sqlalchemy import text
-from app.database import engine, SessionLocal
+from telegram.database import engine, SessionLocal
 import logging
 
 # Set up logging

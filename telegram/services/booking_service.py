@@ -9,7 +9,7 @@ from ..database import Booking, Feedback
 from ..models import ClaudeMainResponse, BookingRecord
 from ..config import ProjectConfig
 from ..services.google_sheets import GoogleSheetsService
-from app.services.dialogue_export import DialogueExporter
+from telegram.services.dialogue_export import DialogueExporter
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +240,7 @@ class BookingService:
             logger.info(f"Message ID: {message_id} - Booking created successfully: booking_id={booking.id}, client_id={client_id}")
             # Экспортируем диалог на Google Drive
             try:
-                from app.database import SessionLocal, Dialogue
+                from telegram.database import SessionLocal, Dialogue
                 db = SessionLocal()
                 try:
                     dialogues = db.query(Dialogue).filter(

@@ -11,7 +11,7 @@ class DialogueExporter:
     def __init__(self, project_name=None):
         self.drive_service = None
         self.docs_service = None
-        self.project_name = "anna-paris-8013"  # Хардкод для этого проекта
+        self.project_name = "fastapi_ai_service"  # Хардкод для этого проекта
         self.workspace_email = os.getenv('GOOGLE_WORKSPACE_EMAIL', '888999888nike@jarvis-dev.ai')
         self.folder_id = None
         

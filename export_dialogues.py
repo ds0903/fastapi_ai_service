@@ -20,8 +20,8 @@ async def export_dialogue(client_id: str, client_name: str):
     os.environ['SALON_FOLDER_NAME'] = FOLDER_NAME
     
     try:
-        from app.services.dialogue_export import DialogueExporter
-        from app.database import SessionLocal, Dialogue
+        from telegram.services.dialogue_export import DialogueExporter
+        from telegram.database import SessionLocal, Dialogue
         
         # Получаем диалоги из БД
         db = SessionLocal()

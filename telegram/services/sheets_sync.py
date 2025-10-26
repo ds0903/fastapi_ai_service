@@ -148,7 +148,7 @@ class SheetsSyncService:
                 """), {'sheet_name': sheet_name, 'row': row}).fetchone()
                 
                 if slot_data:
-                    from app.database import Booking
+                    from telegram.database import Booking
                     deleted_count = self.db.query(Booking).filter(
                         Booking.specialist_name == slot_data.specialist,
                         Booking.appointment_date == slot_data.date,
@@ -194,7 +194,7 @@ async def run_sheets_background_sync(project_config):
     from google.oauth2.service_account import Credentials
     from datetime import datetime
     from sqlalchemy import text
-    from app.database import SessionLocal
+    from telegram.database import SessionLocal
     
     logger.info("[SYNC] Starting Google Sheets → DB background sync task")
     

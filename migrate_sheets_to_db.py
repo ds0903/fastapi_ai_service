@@ -9,10 +9,10 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 import json
 
-sys.path.append('/root/anna-paris-8013')
+sys.path.append('/root/fastapi_ai_service')
 
-from app.database import SessionLocal
-from app.config import ProjectConfig, settings
+from telegram.database import SessionLocal
+from telegram.config import ProjectConfig, settings
 from sqlalchemy import text
 from google.oauth2.service_account import Credentials
 import logging

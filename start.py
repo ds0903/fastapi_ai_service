@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 def check_environment():
     """Check if all required environment variables are set"""
-    from app.config import settings
+    from telegram.config import settings
     
     required_vars = [
         ('DATABASE_URL', settings.database_url),
@@ -54,7 +54,7 @@ def check_environment():
 def create_database_tables():
     """Create database tables if they don't exist"""
     try:
-        from app.database import create_tables
+        from telegram.database import create_tables
         create_tables()
         print("✅ Database tables created successfully")
         return True
@@ -64,13 +64,13 @@ def create_database_tables():
 
 def test_connections():
     """Test connections to external services"""
-    from app.config import settings
+    from telegram.config import settings
     
     print("🔍 Testing connections...")
     
     # Test database connection
     try:
-        from app.database import engine
+        from telegram.database import engine
         with engine.connect() as conn:
             conn.execute("SELECT 1")
         print("✅ Database connection successful")
@@ -141,7 +141,7 @@ def start_application():
     """Start the FastAPI application"""
     try:
         import uvicorn
-        from app.config import settings
+        from telegram.config import settings
         
         print(f"🚀 Starting application on {settings.host}:{settings.port}")
         print(f"📚 API documentation available at: http://{settings.host}:{settings.port}/docs")
@@ -158,7 +158,7 @@ def start_application():
         print(f"   📁 Dialogue archive: {settings.dialogue_archive_hours}h")
         
         uvicorn.run(
-            "main:app",
+            "main:telegram",
             host=settings.host,
             port=settings.port,
             reload=settings.debug,
@@ -177,7 +177,7 @@ def start_application():
 
 def show_startup_banner():
     """Show startup banner with system info"""
-    from app.config import settings
+    from telegram.config import settings
     
     print("🤖 Telegram Bot Backend - Starting up...")
     print("=" * 50)
