@@ -7,7 +7,7 @@ async def test():
     os.environ['SALON_OWNER_EMAILS'] = 'elwing4289@gmail.com'
     os.environ['SALON_FOLDER_NAME'] = 'Beauty_Digital_8012_Test'
     
-    from telegram.services.dialogue_export import DialogueExporter
+    from app.services.dialogue_export import DialogueExporter
     
     print("Инициализируем экспортер...")
     exporter = DialogueExporter()

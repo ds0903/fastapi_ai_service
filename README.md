@@ -100,7 +100,7 @@ CREATE DATABASE cosmetology_bot;
 
 **Telegram:**
 ```bash
-python telegram/bot.py
+python app/bot.py
 ```
 
 **WhatsApp/Viber/Instagram:**

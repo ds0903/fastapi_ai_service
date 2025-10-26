@@ -24,4 +24,6 @@ aioredis
 python-dateutil
 pytz
 requests
+google-cloud-speech
+google-cloud-texttospeech
 aiogram

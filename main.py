@@ -17,20 +17,81 @@ import locale
 import pytz
 from pytz import timezone
 
-from telegram.database import get_db, create_tables, SessionLocal, Dialogue
-from telegram.config import settings, ProjectConfig
-from telegram.models import (
+from app.database import get_db, create_tables, SessionLocal, Dialogue
+from app.config import settings, ProjectConfig
+from app.models import (
     SendPulseMessage, 
     WebhookResponse, 
     ProjectStats,
     MessageStatus
 )
-from telegram.services.message_queue import MessageQueueService
-from telegram.utils.date_calendar import generate_calendar_for_claude
-from telegram.services.claude_service import ClaudeService
-from telegram.services.google_sheets import GoogleSheetsService
-from telegram.services.booking_service import BookingService
-from telegram.services.email_service import EmailService
+from app.services.message_queue import MessageQueueService
+from app.utils.date_calendar import generate_calendar_for_claude
+from app.services.claude_service import ClaudeService
+from app.services.google_sheets import GoogleSheetsService
+from app.services.booking_service import BookingService
+from app.services.email_service import EmailService
+
+# Platform integrations
+# Telegram
+try:
+    from telegram.handlers.webhook import router as telegram_webhook_router, init_telegram_webhook_handler
+    from aiogram import Bot
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    TELEGRAM_WEBHOOK_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("Telegram webhook modules imported successfully")
+except ImportError as e:
+    TELEGRAM_WEBHOOK_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"Telegram webhook modules not available: {e}")
+
+# WhatsApp
+try:
+    from whatsapp.handlers.messages import router as whatsapp_router, init_whatsapp_handler
+    WHATSAPP_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("WhatsApp modules imported successfully")
+except ImportError as e:
+    WHATSAPP_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"WhatsApp modules not available: {e}")
+
+# Viber
+try:
+    from viber.handlers.messages import router as viber_router, init_viber_handler
+    VIBER_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("Viber modules imported successfully")
+except ImportError as e:
+    VIBER_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"Viber modules not available: {e}")
+
+# Instagram
+try:
+    from instagram.handlers.messages import router as instagram_router, init_instagram_handler
+    INSTAGRAM_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("Instagram modules imported successfully")
+except ImportError as e:
+    INSTAGRAM_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"Instagram modules not available: {e}")
+
+# Telephony integration
+try:
+    from telephony.voice_routes import router as telephony_router, set_telephony_service
+    from telephony.telephony_service import TelephonyService
+    from telephony.config import binotel_settings
+    TELEPHONY_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("Telephony modules imported successfully")
+except ImportError as e:
+    TELEPHONY_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"Telephony modules not available: {e}")
 
 # Кеш для хранения данных pending подтверждений
 # Формат: {client_id: {"date": "...", "time": "...", "specialist": "...", "service": "...", "timestamp": ...}}
@@ -207,7 +268,7 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Loaded configuration for project '{project_id}'")
         
         # Create database record for default project if it doesn't exist
-        from telegram.database import Project
+        from app.database import Project
         existing_project = db.query(Project).filter(Project.project_id == "default").first()
         if not existing_project:
             db_project = Project(
@@ -223,12 +284,12 @@ async def lifespan(app: FastAPI):
             logger.info("Default project already exists in database")
         
         # Start dialogue compression background task
-        from telegram.services.dialogue_archiving import run_dialogue_compression_task
+        from app.services.dialogue_archiving import run_dialogue_compression_task
         compression_task = asyncio.create_task(run_dialogue_compression_task(project_configs))
         logger.info("Started dialogue compression background task")
         
         # Start Google Sheets background sync
-        from telegram.services.sheets_sync import run_sheets_background_sync
+        from app.services.sheets_sync import run_sheets_background_sync
         sheets_task = asyncio.create_task(run_sheets_background_sync(project_configs["default"]))
         logger.info("Started Google Sheets background sync (every 5 min)")
         
@@ -238,6 +299,46 @@ async def lifespan(app: FastAPI):
         logger.info("Initialized global ClaudeService for load balancing between API keys")
         logger.info("📊 Load balance stats available at: GET /admin/load-balance-stats")
         
+        # Initialize platform handlers
+        if settings.telegram_enabled and TELEGRAM_WEBHOOK_AVAILABLE:
+            await init_telegram_webhook_handler(project_configs, global_claude_service)
+            logger.info("✅ Telegram webhook handler initialized")
+        elif not settings.telegram_enabled:
+            logger.info("🚫 Telegram disabled in .env (TELEGRAM_ENABLED=false)")
+        
+        if settings.whatsapp_enabled and WHATSAPP_AVAILABLE:
+            init_whatsapp_handler(project_configs, global_claude_service)
+            logger.info("✅ WhatsApp handler initialized")
+        elif not settings.whatsapp_enabled:
+            logger.info("🚫 WhatsApp disabled in .env (WHATSAPP_ENABLED=false)")
+        
+        if settings.viber_enabled and VIBER_AVAILABLE:
+            init_viber_handler(project_configs, global_claude_service)
+            logger.info("✅ Viber handler initialized")
+        elif not settings.viber_enabled:
+            logger.info("🚫 Viber disabled in .env (VIBER_ENABLED=false)")
+        
+        if settings.instagram_enabled and INSTAGRAM_AVAILABLE:
+            init_instagram_handler(project_configs, global_claude_service)
+            logger.info("✅ Instagram handler initialized")
+        elif not settings.instagram_enabled:
+            logger.info("🚫 Instagram disabled in .env (INSTAGRAM_ENABLED=false)")
+        
+        # Initialize Telephony Service if enabled
+        if settings.telephony_enabled and TELEPHONY_AVAILABLE:
+            try:
+                telephony_service = TelephonyService(db, default_config, global_claude_service)
+                set_telephony_service(telephony_service)
+                logger.info("✅ Telephony service initialized successfully")
+                logger.info(f"📞 Binotel configured: {bool(binotel_settings.binotel_api_key)}")
+                logger.info(f"☁️ Google Cloud configured: {bool(binotel_settings.google_application_credentials)}")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize telephony service: {e}")
+        elif not settings.telephony_enabled:
+            logger.info("🚫 Telephony disabled in .env (TELEPHONY_ENABLED=false)")
+        else:
+            logger.warning("⚠️ Telephony service not available - modules not imported")
+
     finally:
         db.close()
     
@@ -261,9 +362,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Telegram Bot Backend",
-    description="FastAPI backend for SendPulse Telegram bot with AI management",
-    version="1.0.0",
+    title="Telegram Bot Backend with Telephony",
+    description="FastAPI backend for SendPulse Telegram bot with AI management and Binotel telephony",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -275,15 +376,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include platform routes
+if settings.telegram_enabled and TELEGRAM_WEBHOOK_AVAILABLE:
+    app.include_router(telegram_webhook_router)
+    logger.info("✅ Telegram webhook routes registered at /app")
+elif not settings.telegram_enabled:
+    logger.info("🚫 Telegram routes disabled (TELEGRAM_ENABLED=false)")
+else:
+    logger.warning("⚠️ Telegram routes not available - modules not imported")
+
+if settings.whatsapp_enabled and WHATSAPP_AVAILABLE:
+    app.include_router(whatsapp_router)
+    logger.info("✅ WhatsApp routes registered at /whatsapp")
+elif not settings.whatsapp_enabled:
+    logger.info("🚫 WhatsApp routes disabled (WHATSAPP_ENABLED=false)")
+else:
+    logger.warning("⚠️ WhatsApp routes not available - modules not imported")
+
+if settings.viber_enabled and VIBER_AVAILABLE:
+    app.include_router(viber_router)
+    logger.info("✅ Viber routes registered at /viber")
+elif not settings.viber_enabled:
+    logger.info("🚫 Viber routes disabled (VIBER_ENABLED=false)")
+else:
+    logger.warning("⚠️ Viber routes not available - modules not imported")
+
+if settings.instagram_enabled and INSTAGRAM_AVAILABLE:
+    app.include_router(instagram_router)
+    logger.info("✅ Instagram routes registered at /instagram")
+elif not settings.instagram_enabled:
+    logger.info("🚫 Instagram routes disabled (INSTAGRAM_ENABLED=false)")
+else:
+    logger.warning("⚠️ Instagram routes not available - modules not imported")
+
+if settings.telephony_enabled and TELEPHONY_AVAILABLE:
+    app.include_router(telephony_router)
+    logger.info("✅ Telephony routes registered at /telephony")
+elif not settings.telephony_enabled:
+    logger.info("🚫 Telephony routes disabled (TELEPHONY_ENABLED=false)")
+else:
+    logger.warning("⚠️ Telephony routes not available - modules not imported")
+
 
 @app.get("/")
 async def root():
-    return {"message": "Telegram Bot Backend is running"}
+    return {
+        "message": "Multi-Platform AI Bot Service",
+        "version": "2.0.0",
+        "platforms": {
+            "app": settings.telegram_enabled,
+            "whatsapp": settings.whatsapp_enabled,
+            "viber": settings.viber_enabled,
+            "instagram": settings.instagram_enabled,
+            "telephony": settings.telephony_enabled and TELEPHONY_AVAILABLE
+        }
+    }
 
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow()}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow(),
+        "platforms": {
+            "app": settings.telegram_enabled,
+            "whatsapp": settings.whatsapp_enabled,
+            "viber": settings.viber_enabled,
+            "instagram": settings.instagram_enabled,
+            "telephony": settings.telephony_enabled and TELEPHONY_AVAILABLE
+        }
+    }
 
 @app.post("/make/add-template-message")
 async def add_template_message(request: Request):
@@ -404,7 +566,7 @@ async def update_booking_status(request: Request):
             client_id, date, time, status
         )
         
-        # Также пытаемся обновить в основной таблице, если есть специалист в запросе
+        # Також пытаемся обновить в основной таблице, если есть специалист в запросе
         specialist = data.get('specialist')
         if specialist:
             main_success = await sheets_service.update_booking_status_in_main_table(
@@ -478,7 +640,7 @@ async def sendpulse_webhook(
             )
         
         # Ensure project exists in database (create if doesn't exist)
-        from telegram.database import Project
+        from app.database import Project
         existing_project = db.query(Project).filter(Project.project_id == message.project_id).first()
         if not existing_project:
             logger.info(f"Message ID: {message_id} - Creating new project in database: {message.project_id}")
@@ -491,15 +653,15 @@ async def sendpulse_webhook(
             db.add(db_project)
             db.commit()
             logger.info(f"Message ID: {message_id} - Created project {message.project_id} in database")
-        
+
         # Initialize services
         logger.debug(f"Message ID: {message_id} - Initializing queue service for webhook request from client_id={client_id}")
         queue_service = MessageQueueService(db)
-        
+
         # Process incoming message
         logger.info(f"Message ID: {message_id} - Processing incoming message {message.response[:100]} through queue service for client_id={client_id}")
         queue_result = queue_service.process_incoming_message(message, message_id)
-        
+
         if "error" in queue_result:
             error_count += 1
             logger.error(f"Message ID: {message_id} - Queue processing error for client_id={client_id}: {queue_result['error']}")
@@ -511,7 +673,7 @@ async def sendpulse_webhook(
                 status="500",
                 user_message=message.response
             )
-        
+
         # Check if this message should be skipped due to retry logic
         if queue_result.get("send_status") == "FALSE":
             logger.info(f"Message ID: {message_id} - Message skipped due to retry logic for client_id={client_id}")
@@ -523,7 +685,7 @@ async def sendpulse_webhook(
                 status="200",
                 user_message=message.response
             )
-        
+
         # Process the message directly and wait for response
         logger.info(f"Message ID: {message_id} - Processing message directly for client_id={client_id}")
         response_data = await process_message_async(
@@ -532,7 +694,7 @@ async def sendpulse_webhook(
             queue_result["queue_item_id"],
             message_id, contact_send_id
         )
-        
+
         if not response_data:
             error_count += 1
             logger.error(f"Message ID: {message_id} - No response received from processing for client_id={client_id}")
@@ -544,7 +706,7 @@ async def sendpulse_webhook(
                 status="200",
                 user_message=message.response
             )
-        
+
         # Check for processing errors in response_data
         if response_data.get("error"):
             error_count += response_data.get("error_count", 1)
@@ -557,17 +719,17 @@ async def sendpulse_webhook(
                 status="200",
                 user_message=message.response
             )
-        
+
         # CRITICAL: Use atomic winner claiming to determine send_status
         # This prevents race conditions where multiple messages get TRUE or no messages get TRUE
         queue_service = MessageQueueService(db)
         is_winner = queue_service.try_claim_as_winner(
-            message.project_id, 
-            client_id, 
-            queue_result["queue_item_id"], 
+            message.project_id,
+            client_id,
+            queue_result["queue_item_id"],
             message_id
         )
-        
+
         # Determine send_status and count based on winner status
         if is_winner:
             # This message won - it's the latest and should return TRUE
@@ -583,7 +745,7 @@ async def sendpulse_webhook(
             final_gpt_response = ""  # CRITICAL: Empty response for FALSE status to prevent duplicate delivery
             final_pic = ""  # No picture for superseded messages
             logger.info(f"Message ID: {message_id} - Message {queue_result['queue_item_id']} lost winner claim for client_id={client_id}, returning send_status=FALSE, count=None")
-        
+
         logger.info(f"Message ID: {message_id} - SENDING WebhookResponse: send_status={send_status}, gpt_response length={len(final_gpt_response) if final_gpt_response else 0}, first 100 chars: {final_gpt_response[:100] if final_gpt_response else "EMPTY"}")
         # Return the final response
         return WebhookResponse(
@@ -594,7 +756,7 @@ async def sendpulse_webhook(
             status="200",
             user_message=message.response
         )
-        
+
     except Exception as e:
         error_count += 1
         logger.error(f"Message ID: {message_id} - Webhook error: {e}", exc_info=True)
@@ -614,14 +776,14 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
     This implements the full processing pipeline from the technical specification
     """
     logger.info(f"Message ID: {message_id} - Starting message processing for project_id={project_id}, client_id={client_id}, queue_item_id={queue_item_id}")
-    
+
     error_count = 0
-    
+
     try:
         # Get new database session for processing
-        from telegram.database import SessionLocal
+        from app.database import SessionLocal
         db = SessionLocal()
-        
+
         try:
             # Get project configuration
             project_config = project_configs.get(project_id, project_configs.get("default"))
@@ -634,7 +796,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     "gpt_response": "Произошла ошибка конфигурации проекта",
                     "pic": ""
                 }
-            
+
             # Initialize services
             logger.debug(f"Message ID: {message_id} - Initializing services for client_id={client_id}")
             queue_service = MessageQueueService(db)
@@ -642,7 +804,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             claude_service = global_claude_service
             sheets_service = GoogleSheetsService(project_config)
             booking_service = BookingService(db, project_config, contact_send_id=contact_send_id)
-            
+
             # Get message from queue
             logger.debug(f"Message ID: {message_id} - Getting message from queue for client_id={client_id}")
             message_item = queue_service.get_message_for_processing(project_id, client_id, message_id)
@@ -655,9 +817,9 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     "gpt_response": "Сообщение не найдено в очереди",
                     "pic": ""
                 }
-            
+
             # Extract image URL from message if present
-            from telegram.models import SendPulseMessage
+            from app.models import SendPulseMessage
             temp_message = SendPulseMessage(
                 date=datetime.now().strftime("%d.%m.%Y %H:%M"),
                 response=message_item.aggregated_message,
@@ -665,37 +827,37 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             )
             image_url = temp_message.get_image_url()
             clean_message = temp_message.get_text_without_image_url() if image_url else message_item.aggregated_message
-            
+
             if image_url:
                 logger.info(f"Message ID: {message_id} - Image URL detected in message: {image_url[:100]}...")
                 logger.info(f"Message ID: {message_id} - Clean message text: '{clean_message[:100]}...'")
             else:
                 logger.debug(f"Message ID: {message_id} - No image URL found in message")
-            
+
             logger.info(f"Message ID: {message_id} - Processing message: '{clean_message[:100]}...' for client_id={client_id}")
-            
+
             # Update message status to processing
             logger.debug(f"Message ID: {message_id} - Updating message status to processing for message_id={message_item.id}")
             queue_service.update_message_status(message_item.id, MessageStatus.PROCESSING, message_id)
-            
+
             # Get dialogue history and zip_history
             logger.debug(f"Message ID: {message_id} - Getting dialogue history for client_id={client_id}")
             dialogue_history = get_dialogue_history(db, project_id, client_id, message_id)
-            
+
             # Use clean message without image URL for dialogue and AI processing
             current_message_text = clean_message if image_url else message_item.aggregated_message
-            
+
             # Get compressed dialogue history (zip_history)
-            from telegram.services.dialogue_archiving import DialogueArchivingService
+            from app.services.dialogue_archiving import DialogueArchivingService
             dialogue_service = DialogueArchivingService()
             zip_history = dialogue_service.get_zip_history(db, project_id, client_id)
             logger.debug(f"Message ID: {message_id} - Got zip_history for client_id={client_id}: {len(zip_history) if zip_history else 0} characters")
-            
+
             # Получаем текущую дату по Берлину и день недели
             berlin_tz = pytz.timezone('Europe/Berlin')
             berlin_now = datetime.now(berlin_tz)
             current_date = berlin_now.strftime("%d.%m.%Y %H:%M")
-            
+
             # Генерируем календарь на месяц вперед для Claude
             date_calendar = generate_calendar_for_claude(berlin_now, days_ahead=30)
             logger.debug(f"Message ID: {message_id} - Generated calendar: {len(date_calendar)} characters")
@@ -711,7 +873,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     current_date,  # Добавляем
                     day_of_week,   # Добавляем
                     date_calendar,  # Добавляем календарь
-                    message_id, 
+                    message_id,
                     zip_history
                 )
                 if intent_result:
@@ -720,17 +882,17 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 error_count += 1
                 logger.error(f"Message ID: {message_id} - Error in intent detection for client_id={client_id}: {e}")
                 # Continue with default intent
-                from telegram.models import IntentDetectionResult
+                from app.models import IntentDetectionResult
                 intent_result = IntentDetectionResult(waiting=1)
                 # Ensure intent_result is not None
                 if intent_result is None:
-                    from telegram.models import IntentDetectionResult
-                    intent_result = IntentDetectionResult(waiting=1)            
+                    from app.models import IntentDetectionResult
+                    intent_result = IntentDetectionResult(waiting=1)
 
             # Steps 2 & 3: Run service identification and slot fetching in parallel when possible
             # Ensure intent_result is not None
             if intent_result is None:
-                from telegram.models import IntentDetectionResult
+                from app.models import IntentDetectionResult
                 intent_result = IntentDetectionResult(waiting=1)
             service_result = None
             available_slots = {}
@@ -739,15 +901,15 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             berlin_tz = timezone('Europe/Berlin')
             current_date = datetime.now(berlin_tz)
             day_of_week = datetime.now().strftime("%A")  # Monday, Tuesday, etc.
-            
+
             if not intent_result.waiting:
                 # Client is not just chatting - need service info and slots
                 logger.info(f"Message ID: {message_id} - Running parallel service identification and slot fetching for client_id={client_id}")
                 logger.debug(f"Message ID: {message_id} - Intent result: waiting={intent_result.waiting}, date_order={intent_result.date_order}, desire_time0={intent_result.desire_time0}, desire_time1={intent_result.desire_time1}")
-                
+
                 # Prepare tasks that can run in parallel
                 tasks = []
-                
+
                 # Task 1: Service identification
                 service_task = claude_service.identify_service(
                     project_config,
@@ -756,7 +918,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     message_id
                 )
                 tasks.append(service_task)
-                
+
                 # Task 2: Get slots based on intent (if we have date/time info)
                 slot_task = None
                 logger.debug(f"Message ID: {message_id} - Checking intent conditions for slot fetching: date_order='{intent_result.date_order}', desire_time0='{intent_result.desire_time0}', desire_time1='{intent_result.desire_time1}'")
@@ -788,32 +950,32 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             slot_task = sheets_service.get_available_slots_by_time_range_async(
                                 db, start_time, end_time, 1
                             )
-                
+
                 if slot_task:
                     logger.debug(f"Message ID: {message_id} - Slot task created, will fetch slots")
                 else:
                     logger.warning(f"Message ID: {message_id} - No slot task created - intent detection conditions not met for slot fetching")
-                
+
                 if slot_task:
                     tasks.append(slot_task)
-                
+
                 # Task 3: Get client bookings (can run in parallel)
                 client_bookings_task = asyncio.to_thread(booking_service.get_client_bookings_as_string, client_id)
                 tasks.append(client_bookings_task)
-                
+
                 try:
                     # Run tasks in parallel
                     logger.debug(f"Message ID: {message_id} - Running {len(tasks)} tasks in parallel for client_id={client_id}")
                     results = await asyncio.gather(*tasks, return_exceptions=True)
-                    
+
                     # Process results
                     service_result = results[0] if not isinstance(results[0], Exception) else None
                     if isinstance(results[0], Exception):
                         error_count += 1
                         logger.error(f"Message ID: {message_id} - Error in parallel service identification for client_id={client_id}: {results[0]}")
-                        from telegram.models import ServiceIdentificationResult
+                        from app.models import ServiceIdentificationResult
                         service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
-                    
+
                     if len(results) > 1 and slot_task:
                         slots = results[1] if not isinstance(results[1], Exception) else None
                         if isinstance(results[1], Exception):
@@ -833,7 +995,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                         else:
                             logger.warning(f"Message ID: {message_id} - No available slots returned from slot fetching task")
                             slots_target_date = "no_slots"
-                    
+
                     # Get client bookings result
                     client_bookings_idx = 2 if slot_task else 1
                     if len(results) > client_bookings_idx:
@@ -844,51 +1006,51 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             client_bookings = ""
                     else:
                         client_bookings = ""
-                    
+
                     logger.info(f"Message ID: {message_id} - Parallel processing completed for client_id={client_id}")
-                    
+
                 except Exception as e:
-                    error_count += 1	
+                    error_count += 1
                     logger.error(f"Message ID: {message_id} - Error in parallel processing for client_id={client_id}: {e}")
                     # Fallback to default values
-                    from telegram.models import ServiceIdentificationResult
+                    from app.models import ServiceIdentificationResult
                     service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
                     client_bookings = ""
-                
+
                 # If we need to refetch slots with correct time_fraction after service identification
                 # Локальный пересчет слотов вместо повторного запроса к Google Sheets
                 if service_result and service_result.time_fraction != 1 and available_slots:
                     logger.info(f"Message ID: {message_id} - Starting local slot recalculation for time_fraction={service_result.time_fraction}")
-                    from telegram.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
-                    
+                    from app.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
+
                     # Логгируем слоты ДО пересчета
                     for spec, slots in available_slots.items():
                         if isinstance(slots, list):
                             logger.debug(f"Message ID: {message_id} - BEFORE: {spec} has {len(slots)} slots")
-                    
+
                     # Пересчитываем available_slots
                     # Сохраняем оригинальные available_slots для пересчёта reserved
                     original_available_slots = dict(available_slots)
                     available_slots = apply_duration_to_all_specialists(available_slots, service_result.time_fraction)
-                    
+
                     # Логгируем слоты ПОСЛЕ пересчета
                     for spec, slots in available_slots.items():
                         if isinstance(slots, list):
                             logger.info(f"Message ID: {message_id} - AFTER RECALC: {spec} has {len(slots)} slots for {service_result.time_fraction*project_config.slot_duration_minutes}min service")
                             if len(slots) > 0:
                                 logger.debug(f"Message ID: {message_id} - {spec} available times: {', '.join(slots[:5])}{'...' if len(slots) > 5 else ''}")
-                    
+
                     # Пересчитываем reserved_slots
                     if reserved_slots is not None:
                         old_reserved_count = sum(len(s) if isinstance(s, list) else 0 for s in reserved_slots.values())
                         reserved_slots = apply_reserved_duration_to_all_specialists(reserved_slots, original_available_slots, service_result.time_fraction)
                         new_reserved_count = sum(len(s) if isinstance(s, list) else 0 for s in reserved_slots.values())
                         logger.info(f"Message ID: {message_id} - Reserved slots expanded from {old_reserved_count} to {new_reserved_count} for time_fraction={service_result.time_fraction}")
-                    
+
                     logger.info(f"Message ID: {message_id} - Slots recalculated locally, saved 4-8 Google API calls and ~4-8 seconds")
                 else:
                     logger.debug(f"Message ID: {message_id} - No slot recalculation needed: time_fraction={getattr(service_result, 'time_fraction', 1)}")
-                
+
             else:
                 # Client is just chatting/waiting - only need basic info
                 logger.info(f"Message ID: {message_id} - Client is waiting/chatting for client_id={client_id} (waiting={intent_result.waiting}), skipping service identification and slot fetching")
@@ -898,29 +1060,29 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     error_count += 1
                     logger.error(f"Message ID: {message_id} - Error getting client bookings for client_id={client_id}: {e}")
                     client_bookings = ""
-            
+
             # Step 3: Generate main response (async)
             logger.info(f"Message ID: {message_id} - Generating main response for client_id={client_id}")
-            
+
             # Log detailed slot information for debugging
             total_available_slots = sum(len(slots) for slots in available_slots.values()) if available_slots else 0
             if total_available_slots == 0:
                 logger.warning(f"Message ID: {message_id} - NO AVAILABLE SLOTS FOUND for client request. This might cause the bot to say 'no data available'")
             else:
                 logger.info(f"Message ID: {message_id} - Found {total_available_slots} total available slots across all specialists")
-                
+
             logger.info(f"Message ID: {message_id} - SENDING TO CLAUDE: available_slots={available_slots}, reserved_slots={reserved_slots}, slots_target_date={slots_target_date}")
             try:
                 # Получаем последний record_error если есть
                 record_error = None
-                from telegram.database import Dialogue
+                from app.database import Dialogue
                 last_error = db.query(Dialogue).filter(
                     Dialogue.client_id == client_id,
                     Dialogue.project_id == project_id,
                     Dialogue.role == "system",
                     Dialogue.message.like("RECORD_ERROR:%")
                 ).order_by(Dialogue.timestamp.desc()).first()
-            
+
                 if last_error:
                     record_error = last_error.message.replace("RECORD_ERROR: ", "")
                     db.delete(last_error)
@@ -931,9 +1093,9 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     sheets_service.check_client_massage_history(client_id)
                 )
                 logger.info(f"Message ID: {message_id} - Started parallel newbie check for {client_id}")
-                
+
                 # ... здесь остается весь существующий код между проверкой и вызовом generate_main_response ...
-                
+
                 # Получаем результат проверки новичков (вставить ПРЯМО ПЕРЕД main_response = await claude_service.generate_main_response)
                 try:
                     is_newbie = await newbie_check_task
@@ -942,9 +1104,9 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 except Exception as e:
                     logger.error(f"Message ID: {message_id} - Failed to check newbie status: {e}")
                     newbie_status = 1
-                
+
                 # Получаем ошибку предыдущей записи из БД
-                from telegram.database import BookingError
+                from app.database import BookingError
                 booking_error = db.query(BookingError).filter_by(client_id=client_id).first()
                 record_error = booking_error.error_message if booking_error else None
                 if record_error:
@@ -960,7 +1122,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     dialogue_history,
                     current_message_text,
                     current_date.strftime("%d.%m.%Y %H:%M"),
-                    day_of_week, 
+                    day_of_week,
                     date_calendar,  # Добавляем календарь
                     available_slots,
                     reserved_slots,
@@ -984,7 +1146,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     "gpt_response": "Извините, произошла ошибка при генерации ответа. Попробуйте еще раз.",
                     "pic": ""
                 }
-            
+
             # Process booking actions (async)
             booking_result = {"success": False, "message": ""}
             if any([main_response.activate_booking, main_response.reject_order, main_response.change_order, main_response.booking_confirmed, main_response.booking_declined]):
@@ -1003,7 +1165,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 error_msg = booking_result.get("message", "")
                 if error_msg and error_msg not in ["", "None", "No booking action required"]:
                     # Сохраняем в БД
-                    from telegram.database import BookingError
+                    from app.database import BookingError
                     existing_error = db.query(BookingError).filter_by(client_id=client_id).first()
                     if existing_error:
                         existing_error.error_message = error_msg
@@ -1015,10 +1177,10 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     logger.info(f"Message ID: {message_id} - Saved booking error to DB for {client_id}: {error_msg}")
             elif booking_result and booking_result.get("success"):
                 # Удаляем ошибку из БД при успешной записи
-                from telegram.database import BookingError
+                from app.database import BookingError
                 db.query(BookingError).filter_by(client_id=client_id).delete()
                 db.commit()
-                logger.info(f"Message ID: {message_id} - Cleared booking error from DB for {client_id}") 
+                logger.info(f"Message ID: {message_id} - Cleared booking error from DB for {client_id}")
             # Обработка подтверждения/отклонения записи
             # Обработка подтверждения/отклонения записи
             if main_response.booking_confirmed or main_response.booking_declined:
@@ -1029,7 +1191,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                         cached_data = pending_confirmations[client_id]
                         sheets_service = GoogleSheetsService(project_config)
                         status = 'approved' if main_response.booking_confirmed else 'cancelled'
-                        
+
                         # Обновляем статус в таблице Make.com
                         success = await sheets_service.update_booking_status_in_make_table(
                             client_id,
@@ -1037,10 +1199,10 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             cached_data['time'],
                             status
                         )
-                        
+
                         if success:
                             logger.info(f"Message ID: {message_id} - Updated Make table status to {status} for {cached_data['date']} {cached_data['time']}")
-                            
+
                             # Также обновляем статус в основной таблице специалиста
                             if 'specialist' in cached_data and cached_data['specialist']:
                                 main_table_success = await sheets_service.update_booking_status_in_main_table(
@@ -1059,10 +1221,10 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                             logger.warning(f"Message ID: {message_id} - Failed to update Make table status")
                     else:
                         logger.warning(f"Message ID: {message_id} - No cached data found for client {client_id}")
-                    
+
                 except Exception as e:
                     logger.error(f"Message ID: {message_id} - Error processing booking confirmation: {e}")
-            
+
             # Process feedback separately (even if there's no booking action)
             if main_response.feedback:
                 logger.info(f"Message ID: {message_id} - Processing client feedback for client_id={client_id}")
@@ -1073,7 +1235,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     error_count += 1
                     logger.error(f"Message ID: {message_id} - Error processing feedback for client_id={client_id}: {e}")
                     # Continue anyway - feedback errors shouldn't break the main flow
-            
+
             # Process human consultant request
             if main_response.human_consultant_requested:
                 logger.info(f"Message ID: {message_id} - Client requested human consultant (type={main_response.human_consultant_requested}), sending email notification")
@@ -1093,15 +1255,15 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     error_count += 1
                     logger.error(f"Message ID: {message_id} - Error sending human consultant request email for client_id={client_id}: {e}")
                     # Continue anyway - email errors shouldn't break the main flow
-            
+
             def format_time_difference(timestamp1: datetime, timestamp2: datetime) -> str:
                 """Format time difference between two timestamps in human-readable format"""
                 if not timestamp1 or not timestamp2:
                     return ""
-    
+
                 diff = abs(timestamp2 - timestamp1)
                 total_seconds = int(diff.total_seconds())
-    
+
                 if total_seconds < 60:
                     return f"через {total_seconds} сек"
                 elif total_seconds < 3600:
@@ -1130,7 +1292,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 error_count += 1
                 logger.error(f"Message ID: {message_id} - Error saving dialogue entries for client_id={client_id}: {e}")
                 # Continue anyway
-             
+
             # Mark current message as completed (only if not superseded)
             current_status = queue_service.check_if_message_superseded(message_item.id, message_id)
             if not current_status:
@@ -1138,7 +1300,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 queue_service.update_message_status(message_item.id, MessageStatus.COMPLETED, message_id)
             else:
                 logger.debug(f"Message ID: {message_id} - Message {message_item.id} was superseded, preserving superseded status")
-            
+
             # Prepare final response
             final_response = main_response.gpt_response
             if booking_result["success"]:
@@ -1146,10 +1308,10 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     final_response += f"\n\n{booking_result['message']}"
             elif booking_result.get("message") and booking_result["message"] not in [None, "", "None"]:
                 # final_response += f"\n\nОшибка: {booking_result['message']}"  # ЗАКОММЕНТИРОВАНО - не показываем ошибки пользователю
-            
+
                 pass  # Ничего не делаем с ошибкой
             logger.info(f"Message ID: {message_id} - Message processing completed for client_id={client_id} with {error_count} errors")
-            
+
             # Return response data for webhook
             if error_count > 0:
                 return {
@@ -1163,17 +1325,17 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     "gpt_response": final_response,
                     "pic": main_response.pic or ""
                 }
-            
+
         finally:
             db.close()
             logger.debug(f"Message ID: {message_id} - Database session closed for client_id={client_id}")
-            
+
     except Exception as e:
         error_count += 1
         logger.error(f"Message ID: {message_id} - Error processing message for client_id={client_id}: {e}", exc_info=True)
         # Update message status to failed
         try:
-            from telegram.database import SessionLocal
+            from app.database import SessionLocal
             db = SessionLocal()
             queue_service = MessageQueueService(db)
             logger.debug(f"Message ID: {message_id} - Marking message as cancelled due to error for queue_item_id={queue_item_id}")
@@ -1182,7 +1344,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
         except Exception as cleanup_error:
             error_count += 1
             logger.error(f"Message ID: {message_id} - Failed to update message status during error cleanup: {cleanup_error}")
-        
+
         return {
             "error": f"Critical error during processing: {str(e)}",
             "error_count": error_count,
@@ -1193,27 +1355,27 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
 
 def get_dialogue_history(db: Session, project_id: str, client_id: str, message_id: str) -> str:
     """Get recent dialogue history (last 24 hours) for a client"""
-    from telegram.services.dialogue_archiving import DialogueArchivingService
-    
+    from app.services.dialogue_archiving import DialogueArchivingService
+
     logger.debug(f"Message ID: {message_id} - Getting recent dialogue history for client_id={client_id}, project_id={project_id}")
-    
+
     dialogue_service = DialogueArchivingService()
     recent_history = dialogue_service.get_recent_dialogue_history(db, project_id, client_id)
-    
+
     logger.debug(f"Message ID: {message_id} - Built recent dialogue history for client_id={client_id}: {len(recent_history)} characters")
-    
+
     return recent_history
 
 
 def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: str, role: str, message_id: str):
     """Save a dialogue entry using the new dialogue management system"""
-    from telegram.services.dialogue_archiving import DialogueArchivingService
-    
+    from app.services.dialogue_archiving import DialogueArchivingService
+
     logger.debug(f"Message ID: {message_id} - Saving dialogue entry: client_id={client_id}, role={role}, message_length={len(message)}")
-    
+
     dialogue_service = DialogueArchivingService()
     dialogue_service.add_dialogue_entry(db, project_id, client_id, role, message)
-    
+
     logger.debug(f"Message ID: {message_id} - Dialogue entry saved successfully for client_id={client_id}, role={role}")
 
 
@@ -1222,19 +1384,19 @@ def parse_date(date_str: str) -> Optional[date]:
     if not date_str:
         logger.warning("Empty date string provided")
         return None
-    
+
     logger.debug(f"Parsing date string: '{date_str}'")
-    
+
     try:
         # Clean the input string
         cleaned_date = date_str.strip()
-        
+
         # Handle DD.MM format
         if len(cleaned_date.split('.')) == 2:
             current_year = datetime.now().year
             parsed_date = datetime.strptime(f"{cleaned_date}.{current_year}", "%d.%m.%Y").date()
             logger.info(f"Successfully parsed date '{date_str}' as {parsed_date}")
-            
+
             # Validate that the date is reasonable (not too far in the past or future)
             today = date.today()
             if parsed_date < today:
@@ -1244,19 +1406,19 @@ def parse_date(date_str: str) -> Optional[date]:
             elif parsed_date > today.replace(year=current_year + 1):
                 logger.warning(f"Date is too far in the future: {parsed_date}")
                 return None
-                
+
             return parsed_date
-            
-        # Handle DD.MM.YYYY format  
+
+        # Handle DD.MM.YYYY format
         elif len(cleaned_date.split('.')) == 3:
             parsed_date = datetime.strptime(cleaned_date, "%d.%m.%Y").date()
             logger.info(f"Successfully parsed full date '{date_str}' as {parsed_date}")
             return parsed_date
-            
+
         else:
             logger.warning(f"Invalid date format: '{date_str}' (expected DD.MM or DD.MM.YYYY)")
             return None
-            
+
     except ValueError as e:
         logger.warning(f"Failed to parse date '{date_str}': {e}")
         return None
@@ -1280,17 +1442,17 @@ def parse_time(time_str: str) -> Optional[time]:
 def extract_date_from_context(dialogue_history: str, zip_history: str) -> Optional[str]:
     """Extract date from conversation context"""
     import re
-    
+
     # Combine both histories to search for dates
     combined_text = f"{dialogue_history} {zip_history or ''}"
-    
+
     # Look for dates in DD.MM format in recent context
     date_patterns = [
         r'\b(\d{1,2})\.\s*(\d{1,2})\b',  # 16.08 or 16. 08
         r'на\s+(\d{1,2})\.(\d{1,2})',   # на 16.08
         r'записаться\s+(\d{1,2})\.(\d{1,2})',  # записаться 16.08
     ]
-    
+
     for pattern in date_patterns:
         matches = re.findall(pattern, combined_text)
         if matches:
@@ -1299,12 +1461,12 @@ def extract_date_from_context(dialogue_history: str, zip_history: str) -> Option
             date_str = f"{day.zfill(2)}.{month.zfill(2)}"
             logger.debug(f"Extracted date from context: {date_str}")
             return date_str
-    
+
     # Also check for "16.08" explicitly mentioned in zip_history
     if zip_history and "16.08" in zip_history:
         logger.debug("Found 16.08 mentioned in zip_history")
         return "16.08"
-    
+
     logger.debug("No date found in conversation context")
     return None
 
@@ -1312,27 +1474,27 @@ def extract_date_from_context(dialogue_history: str, zip_history: str) -> Option
 @app.get("/projects/{project_id}/stats", response_model=ProjectStats)
 async def get_project_stats(project_id: str, db: Session = Depends(get_db)):
     """Get statistics for a project"""
-    from telegram.database import MessageQueue, Booking
-    
+    from app.database import MessageQueue, Booking
+
     total_messages = db.query(MessageQueue).filter(
         MessageQueue.project_id == project_id
     ).count()
-    
+
     total_bookings = db.query(Booking).filter(
         Booking.project_id == project_id
     ).count()
-    
+
     active_bookings = db.query(Booking).filter(
         and_(
             Booking.project_id == project_id,
             Booking.status == "active"
         )
     ).count()
-    
+
     total_clients = db.query(func.count(func.distinct(MessageQueue.client_id))).filter(
         MessageQueue.project_id == project_id
     ).scalar()
-    
+
     return ProjectStats(
         project_id=project_id,
         total_messages=total_messages,
@@ -1370,16 +1532,16 @@ async def get_project_config(project_id: str):
 async def trigger_dialogue_compression(db: Session = Depends(get_db)):
     """Manually trigger dialogue compression for testing"""
     try:
-        from telegram.services.dialogue_archiving import DialogueArchivingService
-        
+        from app.services.dialogue_archiving import DialogueArchivingService
+
         compression_service = DialogueArchivingService()
-        
+
         # Run compression
         await compression_service.compress_old_dialogues(project_configs)
-        
+
         # Get stats
         stats = compression_service.get_archiving_stats(db)
-        
+
         return {
             "message": "Dialogue compression triggered successfully",
             "stats": stats
@@ -1395,7 +1557,7 @@ async def get_load_balance_stats():
     try:
         if global_claude_service:
             stats = global_claude_service.get_load_balance_stats()
-            
+
             # Determine balance quality
             if stats['balance_difference'] < 5:
                 quality = "✅ Excellent"
@@ -1405,7 +1567,7 @@ async def get_load_balance_stats():
                 quality = "🟡 Fair"
             else:
                 quality = "❌ Poor"
-            
+
             return {
                 "status": "success",
                 "balance_quality": quality,
@@ -1433,7 +1595,7 @@ async def sheets_webhook(request: Request):
     try:
         data = await request.json()
         logger.info(f"Sheets webhook received: {json.dumps(data, indent=2)}")
-        
+
         db = SessionLocal()
         try:
             query = text("""
@@ -1447,22 +1609,22 @@ async def sheets_webhook(request: Request):
                 "status": "received"
             })
             db.commit()
-            
+
             sheet_name = data.get("sheetName")
             row = data.get("row")
             column = data.get("column")
             value = data.get("value")
-            
+
             logger.info(f"Sheets update: {sheet_name}[{row},{column}] = {value}")
-            from telegram.services.sheets_sync import SheetsSyncService
+            from app.services.sheets_sync import SheetsSyncService
             sync_service = SheetsSyncService(db)
-            
+
             slot_data = sync_service.parse_sheet_update(data)
             if slot_data:
                 success = sync_service.update_specific_column(sheet_name, row, column, value)
                 if not success:
                     logger.warning(f"Failed to update sheets_slot for {sheet_name}[{row},{column}]")
-            
+
             return {"status": "success", "message": "Webhook received"}
         finally:
             db.close()
@@ -1472,7 +1634,7 @@ async def sheets_webhook(request: Request):
 async def reset_dialogues_archived(db: Session = Depends(get_db)):
     """Reset archived status of recent dialogues for testing"""
     try:
-        from telegram.database import Dialogue
+        from app.database import Dialogue
         from datetime import datetime, timedelta
         
         # Reset dialogues from last 24 hours to unarchived for testing
@@ -1498,4 +1660,4 @@ async def reset_dialogues_archived(db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=settings.host, port=settings.port) 
+    uvicorn.run(app, host=settings.host, port=settings.port)

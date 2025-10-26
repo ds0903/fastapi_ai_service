@@ -8,10 +8,10 @@ from datetime import datetime
 import httpx
 import os
 
-from telegram.database import SessionLocal
-from telegram.services.message_queue import MessageQueueService
-from telegram.models import SendPulseMessage
-from telegram.bot_processor import process_message_async
+from app.database import SessionLocal
+from app.services.message_queue import MessageQueueService
+from app.models import SendPulseMessage
+from app.bot_processor import process_message_async
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

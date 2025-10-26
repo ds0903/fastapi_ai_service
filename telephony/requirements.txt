@@ -1,0 +1,5 @@
+# Twilio SDK for voice calls
+twilio==9.0.4
+
+# All other dependencies are already in main requirements.txt
+# This file is just for reference of telephony-specific packages

@@ -1,8 +1,8 @@
-# Откройте telegram/services/booking_service.py и добавьте:
+# Откройте app/services/booking_service.py и добавьте:
 
 # 1. В начало файла (после других импортов, строка ~11):
 try:
-    from telegram.services.dialogue_export import DialogueExporter
+    from app.services.dialogue_export import DialogueExporter
     DIALOGUE_EXPORT_ENABLED = True
 except Exception as e:
     DIALOGUE_EXPORT_ENABLED = False
@@ -22,7 +22,7 @@ except Exception as e:
         # Экспортируем диалог если включено
         if self.dialogue_exporter:
             try:
-                from telegram.database import SessionLocal, Dialogue
+                from app.database import SessionLocal, Dialogue
                 db = SessionLocal()
                 try:
                     dialogues = db.query(Dialogue).filter(

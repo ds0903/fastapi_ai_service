@@ -11,8 +11,8 @@ import json
 
 sys.path.append('/root/fastapi_ai_service')
 
-from telegram.database import SessionLocal
-from telegram.config import ProjectConfig, settings
+from app.database import SessionLocal
+from app.config import ProjectConfig, settings
 from sqlalchemy import text
 from google.oauth2.service_account import Credentials
 import logging

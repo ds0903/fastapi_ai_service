@@ -6,7 +6,7 @@ async def test():
     # Используем ID вашей папки из .env
     os.environ['GOOGLE_DRIVE_FOLDER_ID'] = '17gHvokdqdIzsR8tLzTWcC6H1SWNJJwoM'
     
-    from telegram.services.dialogue_export import DialogueExporter
+    from app.services.dialogue_export import DialogueExporter
     
     print("Инициализируем экспортер с вашей папкой...")
     exporter = DialogueExporter()

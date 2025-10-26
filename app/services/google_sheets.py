@@ -652,7 +652,7 @@ class GoogleSheetsService:
                                 logger.debug(f"Found occupied slot in sheets: {time_val} (client_id: {client_id})")
                 
                 # Синхронизация с БД - добавить ПОСЛЕ цикла
-                from telegram.database import SessionLocal, Booking
+                from app.database import SessionLocal, Booking
                 db = SessionLocal()
                 try:
                     for client_id, sheets_bookings in client_bookings_in_sheets.items():
@@ -693,7 +693,7 @@ class GoogleSheetsService:
             logger.info(f"SHEETS DEBUG: Found {len(reserved_slots)} occupied slots from Google Sheets for {specialist_name}: {reserved_slots}")
             
             if hasattr(self, 'db') and self.db:
-                from telegram.database import Booking
+                from app.database import Booking
                 for client_id, sheets_bookings in client_bookings_in_sheets.items():
                     # Получаем записи из БД
                     db_bookings = self.db.query(Booking).filter(
@@ -961,7 +961,7 @@ class GoogleSheetsService:
 
     def is_slot_available_in_sheets(self, specialist_name: str, booking_date: date, booking_time: time) -> bool:
         """Check if slot is available using cached DB data instead of direct Sheets API"""
-        from telegram.database import SessionLocal
+        from app.database import SessionLocal
         from sqlalchemy import text
         
         logger.debug(f"Checking slot availability in DB cache for {specialist_name}: {booking_date} {booking_time}")
