@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import List, Dict, Any
 import os
-from telegram.utils.prompt_loader import get_prompt, get_all_prompts
+from app.utils.prompt_loader import get_prompt, get_all_prompts
 
 
 class Settings(BaseSettings):
@@ -22,13 +22,23 @@ class Settings(BaseSettings):
     google_sheets_credentials_file: str = Field(default="credentials.json")
     google_sheet_id: str = Field(default="")
     google_sheet_make_id: str = Field(default="")
+    google_application_credentials: str = Field(default="credentials.json")
     google_sheets_scopes: List[str] = Field(default=[
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ])
     
+    # Platform Enable/Disable Flags
+    telegram_enabled: bool = Field(default=True)
+    whatsapp_enabled: bool = Field(default=False)
+    viber_enabled: bool = Field(default=False)
+    instagram_enabled: bool = Field(default=False)
+    telephony_enabled: bool = Field(default=False)
+    
     # Telegram Bot (aiogram)
     telegram_bot_token: str = Field(default="")
+    telegram_mode: str = Field(default="polling")  # "polling" or "webhook"
+    telegram_webhook_url: str = Field(default="")
     
     # WhatsApp
     whatsapp_verify_token: str = Field(default="")
@@ -50,7 +60,7 @@ class Settings(BaseSettings):
     sendpulse_api_url: str = Field(default="https://api.sendpulse.com/your-endpoint")
     sendpulse_api_token: str = Field(default="")
     sendpulse_bot_id: str = Field(default="68a711000f8cbe2faf0879da")
-    messenger_channel: str = Field(default="telegram")  # "whatsapp" or "telegram"
+    messenger_channel: str = Field(default="app")  # "whatsapp" or "app"
     
     # Application
     debug: bool = Field(default=True)
@@ -90,6 +100,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = 'ignore'  # Ignore extra fields from .env
 
 
 class ProjectConfig:

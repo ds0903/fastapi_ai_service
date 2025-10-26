@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 from typing import Optional, List
 
-from telegram.config import settings
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class EmailService:
         
         Args:
             request_type: 1 for admin, 2 for consultant, 0 for none
-            client_id: Client telegram ID
+            client_id: Client app ID
             client_name: Client name if available
             phone: Client phone if available
             last_message: Last message from client

@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     sendpulse_api_url: str = Field(default="https://api.sendpulse.com/your-endpoint")
     sendpulse_api_token: str = Field(default="")
     sendpulse_bot_id: str = Field(default="68a711000f8cbe2faf0879da")
-    messenger_channel: str = Field(default="telegram")  # "whatsapp" or "telegram"
+    messenger_channel: str = Field(default="app")  # "whatsapp" or "app"
     
     # Application
     debug: bool = Field(default=True)

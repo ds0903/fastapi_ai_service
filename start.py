@@ -13,7 +13,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 def check_environment():
     """Check if all required environment variables are set"""
-    from telegram.config import settings
+    from app.config import settings
+    
+    # Show enabled platforms
+    print("\n📱 Platform Status:")
+    platforms = [
+        ("Telegram", settings.telegram_enabled),
+        ("WhatsApp", settings.whatsapp_enabled),
+        ("Viber", settings.viber_enabled),
+        ("Instagram", settings.instagram_enabled),
+        ("Telephony", settings.telephony_enabled)
+    ]
+    
+    for platform, enabled in platforms:
+        status = "✅ ENABLED" if enabled else "🚫 DISABLED"
+        print(f"   {platform:12} - {status}")
+    
+    print()
     
     required_vars = [
         ('DATABASE_URL', settings.database_url),
@@ -54,7 +70,7 @@ def check_environment():
 def create_database_tables():
     """Create database tables if they don't exist"""
     try:
-        from telegram.database import create_tables
+        from app.database import create_tables
         create_tables()
         print("✅ Database tables created successfully")
         return True
@@ -64,13 +80,13 @@ def create_database_tables():
 
 def test_connections():
     """Test connections to external services"""
-    from telegram.config import settings
+    from app.config import settings
     
     print("🔍 Testing connections...")
     
     # Test database connection
     try:
-        from telegram.database import engine
+        from app.database import engine
         with engine.connect() as conn:
             conn.execute("SELECT 1")
         print("✅ Database connection successful")
@@ -141,7 +157,7 @@ def start_application():
     """Start the FastAPI application"""
     try:
         import uvicorn
-        from telegram.config import settings
+        from app.config import settings
         
         print(f"🚀 Starting application on {settings.host}:{settings.port}")
         print(f"📚 API documentation available at: http://{settings.host}:{settings.port}/docs")
@@ -158,7 +174,7 @@ def start_application():
         print(f"   📁 Dialogue archive: {settings.dialogue_archive_hours}h")
         
         uvicorn.run(
-            "main:telegram",
+            "main:app",
             host=settings.host,
             port=settings.port,
             reload=settings.debug,
@@ -177,7 +193,7 @@ def start_application():
 
 def show_startup_banner():
     """Show startup banner with system info"""
-    from telegram.config import settings
+    from app.config import settings
     
     print("🤖 Telegram Bot Backend - Starting up...")
     print("=" * 50)

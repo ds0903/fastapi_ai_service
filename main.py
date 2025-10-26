@@ -17,31 +17,79 @@ import locale
 import pytz
 from pytz import timezone
 
-from telegram.database import get_db, create_tables, SessionLocal, Dialogue
-from telegram.config import settings, ProjectConfig
-from telegram.models import (
+from app.database import get_db, create_tables, SessionLocal, Dialogue
+from app.config import settings, ProjectConfig
+from app.models import (
     SendPulseMessage, 
     WebhookResponse, 
     ProjectStats,
     MessageStatus
 )
-from telegram.services.message_queue import MessageQueueService
-from telegram.utils.date_calendar import generate_calendar_for_claude
-from telegram.services.claude_service import ClaudeService
-from telegram.services.google_sheets import GoogleSheetsService
-from telegram.services.booking_service import BookingService
-from telegram.services.email_service import EmailService
+from app.services.message_queue import MessageQueueService
+from app.utils.date_calendar import generate_calendar_for_claude
+from app.services.claude_service import ClaudeService
+from app.services.google_sheets import GoogleSheetsService
+from app.services.booking_service import BookingService
+from app.services.email_service import EmailService
+
+# Platform integrations
+# Telegram
+try:
+    from telegram.handlers.webhook import router as telegram_webhook_router, init_telegram_webhook_handler
+    from aiogram import Bot
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    TELEGRAM_WEBHOOK_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("Telegram webhook modules imported successfully")
+except ImportError as e:
+    TELEGRAM_WEBHOOK_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"Telegram webhook modules not available: {e}")
+
+# WhatsApp
+try:
+    from whatsapp.handlers.messages import router as whatsapp_router, init_whatsapp_handler
+    WHATSAPP_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("WhatsApp modules imported successfully")
+except ImportError as e:
+    WHATSAPP_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"WhatsApp modules not available: {e}")
+
+# Viber
+try:
+    from viber.handlers.messages import router as viber_router, init_viber_handler
+    VIBER_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("Viber modules imported successfully")
+except ImportError as e:
+    VIBER_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"Viber modules not available: {e}")
+
+# Instagram
+try:
+    from instagram.handlers.messages import router as instagram_router, init_instagram_handler
+    INSTAGRAM_AVAILABLE = True
+    logger_init = logging.getLogger(__name__)
+    logger_init.info("Instagram modules imported successfully")
+except ImportError as e:
+    INSTAGRAM_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(f"Instagram modules not available: {e}")
 
 # Telephony integration
 try:
     from telephony.voice_routes import router as telephony_router, set_telephony_service
     from telephony.telephony_service import TelephonyService
     from telephony.config import binotel_settings
-    TELEPHONY_ENABLED = True
+    TELEPHONY_AVAILABLE = True
     logger_init = logging.getLogger(__name__)
     logger_init.info("Telephony modules imported successfully")
 except ImportError as e:
-    TELEPHONY_ENABLED = False
+    TELEPHONY_AVAILABLE = False
     logger_init = logging.getLogger(__name__)
     logger_init.warning(f"Telephony modules not available: {e}")
 
@@ -220,7 +268,7 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Loaded configuration for project '{project_id}'")
         
         # Create database record for default project if it doesn't exist
-        from telegram.database import Project
+        from app.database import Project
         existing_project = db.query(Project).filter(Project.project_id == "default").first()
         if not existing_project:
             db_project = Project(
@@ -236,12 +284,12 @@ async def lifespan(app: FastAPI):
             logger.info("Default project already exists in database")
         
         # Start dialogue compression background task
-        from telegram.services.dialogue_archiving import run_dialogue_compression_task
+        from app.services.dialogue_archiving import run_dialogue_compression_task
         compression_task = asyncio.create_task(run_dialogue_compression_task(project_configs))
         logger.info("Started dialogue compression background task")
         
         # Start Google Sheets background sync
-        from telegram.services.sheets_sync import run_sheets_background_sync
+        from app.services.sheets_sync import run_sheets_background_sync
         sheets_task = asyncio.create_task(run_sheets_background_sync(project_configs["default"]))
         logger.info("Started Google Sheets background sync (every 5 min)")
         
@@ -251,8 +299,33 @@ async def lifespan(app: FastAPI):
         logger.info("Initialized global ClaudeService for load balancing between API keys")
         logger.info("📊 Load balance stats available at: GET /admin/load-balance-stats")
         
+        # Initialize platform handlers
+        if settings.telegram_enabled and TELEGRAM_WEBHOOK_AVAILABLE:
+            await init_telegram_webhook_handler(project_configs, global_claude_service)
+            logger.info("✅ Telegram webhook handler initialized")
+        elif not settings.telegram_enabled:
+            logger.info("🚫 Telegram disabled in .env (TELEGRAM_ENABLED=false)")
+        
+        if settings.whatsapp_enabled and WHATSAPP_AVAILABLE:
+            init_whatsapp_handler(project_configs, global_claude_service)
+            logger.info("✅ WhatsApp handler initialized")
+        elif not settings.whatsapp_enabled:
+            logger.info("🚫 WhatsApp disabled in .env (WHATSAPP_ENABLED=false)")
+        
+        if settings.viber_enabled and VIBER_AVAILABLE:
+            init_viber_handler(project_configs, global_claude_service)
+            logger.info("✅ Viber handler initialized")
+        elif not settings.viber_enabled:
+            logger.info("🚫 Viber disabled in .env (VIBER_ENABLED=false)")
+        
+        if settings.instagram_enabled and INSTAGRAM_AVAILABLE:
+            init_instagram_handler(project_configs, global_claude_service)
+            logger.info("✅ Instagram handler initialized")
+        elif not settings.instagram_enabled:
+            logger.info("🚫 Instagram disabled in .env (INSTAGRAM_ENABLED=false)")
+        
         # Initialize Telephony Service if enabled
-        if TELEPHONY_ENABLED:
+        if settings.telephony_enabled and TELEPHONY_AVAILABLE:
             try:
                 telephony_service = TelephonyService(db, default_config, global_claude_service)
                 set_telephony_service(telephony_service)
@@ -261,8 +334,10 @@ async def lifespan(app: FastAPI):
                 logger.info(f"☁️ Google Cloud configured: {bool(binotel_settings.google_application_credentials)}")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize telephony service: {e}")
+        elif not settings.telephony_enabled:
+            logger.info("🚫 Telephony disabled in .env (TELEPHONY_ENABLED=false)")
         else:
-            logger.warning("⚠️ Telephony service not enabled - modules not imported")
+            logger.warning("⚠️ Telephony service not available - modules not imported")
 
     finally:
         db.close()
@@ -301,18 +376,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include telephony routes
-if TELEPHONY_ENABLED:
+# Include platform routes
+if settings.telegram_enabled and TELEGRAM_WEBHOOK_AVAILABLE:
+    app.include_router(telegram_webhook_router)
+    logger.info("✅ Telegram webhook routes registered at /app")
+elif not settings.telegram_enabled:
+    logger.info("🚫 Telegram routes disabled (TELEGRAM_ENABLED=false)")
+else:
+    logger.warning("⚠️ Telegram routes not available - modules not imported")
+
+if settings.whatsapp_enabled and WHATSAPP_AVAILABLE:
+    app.include_router(whatsapp_router)
+    logger.info("✅ WhatsApp routes registered at /whatsapp")
+elif not settings.whatsapp_enabled:
+    logger.info("🚫 WhatsApp routes disabled (WHATSAPP_ENABLED=false)")
+else:
+    logger.warning("⚠️ WhatsApp routes not available - modules not imported")
+
+if settings.viber_enabled and VIBER_AVAILABLE:
+    app.include_router(viber_router)
+    logger.info("✅ Viber routes registered at /viber")
+elif not settings.viber_enabled:
+    logger.info("🚫 Viber routes disabled (VIBER_ENABLED=false)")
+else:
+    logger.warning("⚠️ Viber routes not available - modules not imported")
+
+if settings.instagram_enabled and INSTAGRAM_AVAILABLE:
+    app.include_router(instagram_router)
+    logger.info("✅ Instagram routes registered at /instagram")
+elif not settings.instagram_enabled:
+    logger.info("🚫 Instagram routes disabled (INSTAGRAM_ENABLED=false)")
+else:
+    logger.warning("⚠️ Instagram routes not available - modules not imported")
+
+if settings.telephony_enabled and TELEPHONY_AVAILABLE:
     app.include_router(telephony_router)
     logger.info("✅ Telephony routes registered at /telephony")
+elif not settings.telephony_enabled:
+    logger.info("🚫 Telephony routes disabled (TELEPHONY_ENABLED=false)")
+else:
+    logger.warning("⚠️ Telephony routes not available - modules not imported")
 
 
 @app.get("/")
 async def root():
     return {
-        "message": "Telegram Bot Backend is running",
-        "telephony_enabled": TELEPHONY_ENABLED,
-        "version": "2.0.0"
+        "message": "Multi-Platform AI Bot Service",
+        "version": "2.0.0",
+        "platforms": {
+            "app": settings.telegram_enabled,
+            "whatsapp": settings.whatsapp_enabled,
+            "viber": settings.viber_enabled,
+            "instagram": settings.instagram_enabled,
+            "telephony": settings.telephony_enabled and TELEPHONY_AVAILABLE
+        }
     }
 
 
@@ -321,7 +438,13 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow(),
-        "telephony_enabled": TELEPHONY_ENABLED
+        "platforms": {
+            "app": settings.telegram_enabled,
+            "whatsapp": settings.whatsapp_enabled,
+            "viber": settings.viber_enabled,
+            "instagram": settings.instagram_enabled,
+            "telephony": settings.telephony_enabled and TELEPHONY_AVAILABLE
+        }
     }
 
 @app.post("/make/add-template-message")
@@ -517,7 +640,7 @@ async def sendpulse_webhook(
             )
         
         # Ensure project exists in database (create if doesn't exist)
-        from telegram.database import Project
+        from app.database import Project
         existing_project = db.query(Project).filter(Project.project_id == message.project_id).first()
         if not existing_project:
             logger.info(f"Message ID: {message_id} - Creating new project in database: {message.project_id}")
@@ -658,7 +781,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
 
     try:
         # Get new database session for processing
-        from telegram.database import SessionLocal
+        from app.database import SessionLocal
         db = SessionLocal()
 
         try:
@@ -696,7 +819,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 }
 
             # Extract image URL from message if present
-            from telegram.models import SendPulseMessage
+            from app.models import SendPulseMessage
             temp_message = SendPulseMessage(
                 date=datetime.now().strftime("%d.%m.%Y %H:%M"),
                 response=message_item.aggregated_message,
@@ -725,7 +848,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             current_message_text = clean_message if image_url else message_item.aggregated_message
 
             # Get compressed dialogue history (zip_history)
-            from telegram.services.dialogue_archiving import DialogueArchivingService
+            from app.services.dialogue_archiving import DialogueArchivingService
             dialogue_service = DialogueArchivingService()
             zip_history = dialogue_service.get_zip_history(db, project_id, client_id)
             logger.debug(f"Message ID: {message_id} - Got zip_history for client_id={client_id}: {len(zip_history) if zip_history else 0} characters")
@@ -759,17 +882,17 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 error_count += 1
                 logger.error(f"Message ID: {message_id} - Error in intent detection for client_id={client_id}: {e}")
                 # Continue with default intent
-                from telegram.models import IntentDetectionResult
+                from app.models import IntentDetectionResult
                 intent_result = IntentDetectionResult(waiting=1)
                 # Ensure intent_result is not None
                 if intent_result is None:
-                    from telegram.models import IntentDetectionResult
+                    from app.models import IntentDetectionResult
                     intent_result = IntentDetectionResult(waiting=1)
 
             # Steps 2 & 3: Run service identification and slot fetching in parallel when possible
             # Ensure intent_result is not None
             if intent_result is None:
-                from telegram.models import IntentDetectionResult
+                from app.models import IntentDetectionResult
                 intent_result = IntentDetectionResult(waiting=1)
             service_result = None
             available_slots = {}
@@ -850,7 +973,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     if isinstance(results[0], Exception):
                         error_count += 1
                         logger.error(f"Message ID: {message_id} - Error in parallel service identification for client_id={client_id}: {results[0]}")
-                        from telegram.models import ServiceIdentificationResult
+                        from app.models import ServiceIdentificationResult
                         service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
 
                     if len(results) > 1 and slot_task:
@@ -890,7 +1013,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     error_count += 1
                     logger.error(f"Message ID: {message_id} - Error in parallel processing for client_id={client_id}: {e}")
                     # Fallback to default values
-                    from telegram.models import ServiceIdentificationResult
+                    from app.models import ServiceIdentificationResult
                     service_result = ServiceIdentificationResult(time_fraction=1, service_name="unknown")
                     client_bookings = ""
 
@@ -898,7 +1021,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 # Локальный пересчет слотов вместо повторного запроса к Google Sheets
                 if service_result and service_result.time_fraction != 1 and available_slots:
                     logger.info(f"Message ID: {message_id} - Starting local slot recalculation for time_fraction={service_result.time_fraction}")
-                    from telegram.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
+                    from app.utils.slot_calculator import apply_duration_to_all_specialists, apply_reserved_duration_to_all_specialists
 
                     # Логгируем слоты ДО пересчета
                     for spec, slots in available_slots.items():
@@ -952,7 +1075,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
             try:
                 # Получаем последний record_error если есть
                 record_error = None
-                from telegram.database import Dialogue
+                from app.database import Dialogue
                 last_error = db.query(Dialogue).filter(
                     Dialogue.client_id == client_id,
                     Dialogue.project_id == project_id,
@@ -983,7 +1106,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     newbie_status = 1
 
                 # Получаем ошибку предыдущей записи из БД
-                from telegram.database import BookingError
+                from app.database import BookingError
                 booking_error = db.query(BookingError).filter_by(client_id=client_id).first()
                 record_error = booking_error.error_message if booking_error else None
                 if record_error:
@@ -1042,7 +1165,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                 error_msg = booking_result.get("message", "")
                 if error_msg and error_msg not in ["", "None", "No booking action required"]:
                     # Сохраняем в БД
-                    from telegram.database import BookingError
+                    from app.database import BookingError
                     existing_error = db.query(BookingError).filter_by(client_id=client_id).first()
                     if existing_error:
                         existing_error.error_message = error_msg
@@ -1054,7 +1177,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
                     logger.info(f"Message ID: {message_id} - Saved booking error to DB for {client_id}: {error_msg}")
             elif booking_result and booking_result.get("success"):
                 # Удаляем ошибку из БД при успешной записи
-                from telegram.database import BookingError
+                from app.database import BookingError
                 db.query(BookingError).filter_by(client_id=client_id).delete()
                 db.commit()
                 logger.info(f"Message ID: {message_id} - Cleared booking error from DB for {client_id}")
@@ -1212,7 +1335,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
         logger.error(f"Message ID: {message_id} - Error processing message for client_id={client_id}: {e}", exc_info=True)
         # Update message status to failed
         try:
-            from telegram.database import SessionLocal
+            from app.database import SessionLocal
             db = SessionLocal()
             queue_service = MessageQueueService(db)
             logger.debug(f"Message ID: {message_id} - Marking message as cancelled due to error for queue_item_id={queue_item_id}")
@@ -1232,7 +1355,7 @@ async def process_message_async(project_id: str, client_id: str, queue_item_id: 
 
 def get_dialogue_history(db: Session, project_id: str, client_id: str, message_id: str) -> str:
     """Get recent dialogue history (last 24 hours) for a client"""
-    from telegram.services.dialogue_archiving import DialogueArchivingService
+    from app.services.dialogue_archiving import DialogueArchivingService
 
     logger.debug(f"Message ID: {message_id} - Getting recent dialogue history for client_id={client_id}, project_id={project_id}")
 
@@ -1246,7 +1369,7 @@ def get_dialogue_history(db: Session, project_id: str, client_id: str, message_i
 
 def save_dialogue_entry(db: Session, project_id: str, client_id: str, message: str, role: str, message_id: str):
     """Save a dialogue entry using the new dialogue management system"""
-    from telegram.services.dialogue_archiving import DialogueArchivingService
+    from app.services.dialogue_archiving import DialogueArchivingService
 
     logger.debug(f"Message ID: {message_id} - Saving dialogue entry: client_id={client_id}, role={role}, message_length={len(message)}")
 
@@ -1351,7 +1474,7 @@ def extract_date_from_context(dialogue_history: str, zip_history: str) -> Option
 @app.get("/projects/{project_id}/stats", response_model=ProjectStats)
 async def get_project_stats(project_id: str, db: Session = Depends(get_db)):
     """Get statistics for a project"""
-    from telegram.database import MessageQueue, Booking
+    from app.database import MessageQueue, Booking
 
     total_messages = db.query(MessageQueue).filter(
         MessageQueue.project_id == project_id
@@ -1409,7 +1532,7 @@ async def get_project_config(project_id: str):
 async def trigger_dialogue_compression(db: Session = Depends(get_db)):
     """Manually trigger dialogue compression for testing"""
     try:
-        from telegram.services.dialogue_archiving import DialogueArchivingService
+        from app.services.dialogue_archiving import DialogueArchivingService
 
         compression_service = DialogueArchivingService()
 
@@ -1493,7 +1616,7 @@ async def sheets_webhook(request: Request):
             value = data.get("value")
 
             logger.info(f"Sheets update: {sheet_name}[{row},{column}] = {value}")
-            from telegram.services.sheets_sync import SheetsSyncService
+            from app.services.sheets_sync import SheetsSyncService
             sync_service = SheetsSyncService(db)
 
             slot_data = sync_service.parse_sheet_update(data)
@@ -1511,7 +1634,7 @@ async def sheets_webhook(request: Request):
 async def reset_dialogues_archived(db: Session = Depends(get_db)):
     """Reset archived status of recent dialogues for testing"""
     try:
-        from telegram.database import Dialogue
+        from app.database import Dialogue
         from datetime import datetime, timedelta
         
         # Reset dialogues from last 24 hours to unarchived for testing
