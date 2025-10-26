@@ -14,7 +14,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot.log', encoding='utf-8')
+        logging.FileHandler('../bot.log', encoding='utf-8')
     ]
 )
 
@@ -25,8 +25,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 # Application imports
-from telegram.config import settings, ProjectConfig
-from telegram.database import create_tables, SessionLocal
+from app.config import settings, ProjectConfig
+from app.database import create_tables, SessionLocal
 
 # Global project configs (MUST BE INITIALIZED BEFORE HANDLER IMPORTS!)
 project_configs: Dict[str, ProjectConfig] = {}
@@ -40,7 +40,7 @@ def load_local_config() -> Dict[str, Any]:
     import json
     import os
     
-    config_file = "local_config.json"
+    config_file = "../local_config.json"
     
     if not os.path.exists(config_file):
         logger.warning(f"Local config file '{config_file}' not found. Using default configuration.")
@@ -104,7 +104,7 @@ async def setup_bot() -> None:
     # Create database record for default project
     db = SessionLocal()
     try:
-        from telegram.database import Project
+        from app.database import Project
         existing_project = db.query(Project).filter(Project.project_id == "default").first()
         if not existing_project:
             db_project = Project(
@@ -122,7 +122,7 @@ async def setup_bot() -> None:
         db.close()
     
     # Initialize global ClaudeService
-    from telegram.services.claude_service import ClaudeService
+    from app.services.claude_service import ClaudeService
     db = SessionLocal()
     try:
         global_claude_service = ClaudeService(db, default_config.slot_duration_minutes)
@@ -134,12 +134,12 @@ async def setup_bot() -> None:
     logger.info("🔄 Starting background tasks...")
     
     # Dialogue compression
-    from telegram.services.dialogue_archiving import run_dialogue_compression_task
+    from app.services.dialogue_archiving import run_dialogue_compression_task
     asyncio.create_task(run_dialogue_compression_task(project_configs))
     logger.info("✅ Started dialogue compression task")
     
     # Google Sheets sync
-    from telegram.services.sheets_sync import run_sheets_background_sync
+    from app.services.sheets_sync import run_sheets_background_sync
     asyncio.create_task(run_sheets_background_sync(project_configs["default"]))
     logger.info("✅ Started Google Sheets sync task")
     
@@ -151,6 +151,13 @@ async def main():
     logger.info("=" * 60)
     logger.info("🤖 Starting Telegram Bot (aiogram + polling)")
     logger.info("=" * 60)
+    
+    # Check if Telegram is enabled
+    if not settings.telegram_enabled:
+        logger.warning("⚠️ TELEGRAM_ENABLED=false in .env file!")
+        logger.warning("Telegram bot is disabled. Set TELEGRAM_ENABLED=true to enable it.")
+        logger.info("✅ Bot stopped (disabled by configuration)")
+        return
     
     # Check bot token
     if not settings.telegram_bot_token:
